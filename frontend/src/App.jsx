@@ -7,6 +7,7 @@ import Elektronik from './pages/Elektronik'
 import Invoice from './pages/Invoice'
 import Riwayat from './pages/Riwayat'
 import Katalog from './pages/Katalog'
+import BarangArt from './pages/BarangArt'
 import Users from './pages/Users'
 import AuditLog from './pages/AuditLog'
 
@@ -56,6 +57,8 @@ export default function App() {
         <Route path="invoice"    element={<BlockKatalogUser><Invoice /></BlockKatalogUser>} />
         <Route path="riwayat"    element={<BlockKatalogUser><Riwayat /></BlockKatalogUser>} />
         <Route path="katalog"    element={<Katalog />} />
+        <Route path="barang-art/logam-mulia" element={<AdminRoute><BarangArt kategori="LOGAM_MULIA" /></AdminRoute>} />
+        <Route path="barang-art/perhiasan"   element={<AdminRoute><BarangArt kategori="PERHIASAN" /></AdminRoute>} />
         <Route path="users"      element={<AdminRoute><Users /></AdminRoute>} />
         <Route path="audit"      element={<SuperRoute><AuditLog /></SuperRoute>} />
       </Route>

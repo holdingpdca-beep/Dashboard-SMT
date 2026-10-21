@@ -15,6 +15,7 @@ const auditRoutes = require('./src/routes/audit');
 const katalogRoutes = require('./src/routes/katalog');
 const notifikasiRoutes = require('./src/routes/notifikasi');
 const cabangRoutes = require('./src/routes/cabang');
+const barangArtRoutes = require('./src/routes/barangArt');
 
 // ── Validasi environment variable wajib saat startup ──
 const requiredEnv = ['DATABASE_URL', 'JWT_SECRET'];
@@ -89,6 +90,7 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/katalog', katalogRoutes);
 app.use('/api/notifikasi', notifikasiRoutes);
 app.use('/api/cabang', cabangRoutes);
+app.use('/api/barang-art', barangArtRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Dashboard SMT Backend Running', timestamp: new Date() });
@@ -105,6 +107,12 @@ const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
   logger.info(`Server berjalan di port ${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  // Nyalakan penjadwal sinkronisasi katalog otomatis (jika diaktifkan di .env)
+  try {
+    require('./src/services/scheduler').startSchedulers();
+  } catch (err) {
+    logger.error(`Gagal memulai penjadwal: ${err.message}`);
+  }
 });
 
 // ── Graceful shutdown ──
