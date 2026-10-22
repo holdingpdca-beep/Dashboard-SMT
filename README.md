@@ -146,15 +146,17 @@ Aplikasi berjalan di `http://localhost:5173`.
 
 ---
 
-## Akun Default (Seed)
+## Akun Admin Awal (Seed)
 
-| Email | Password | Role |
-|---|---|---|
-| `admin@smt.com` | `admin123` | ADMIN |
-| `superuser@smt.com` | `admin123` | SUPER_USER |
-| `user@smt.com` | `admin123` | USER |
+Seed hanya membuat **satu** akun ADMIN. Password **tidak** disimpan di repo —
+wajib di-set lewat environment variable saat menjalankan seed:
 
-> **Ganti password akun default segera setelah pertama kali login.**
+```bash
+SEED_ADMIN_EMAIL=admin@smt.com SEED_ADMIN_PASSWORD='<password-kuat-min-12-karakter>' npm run seed
+```
+
+> Password minimal 12 karakter. Jangan pernah memakai password default/umum.
+> Akun SUPER_USER / USER dibuat manual lewat menu Manajemen User oleh ADMIN.
 
 ---
 

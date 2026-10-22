@@ -2,40 +2,19 @@
 -- DASHBOARD SMT ELEKTRONIK
 -- Script 03: Data Awal (Seed)
 -- ================================================================
--- PENTING: Password di bawah sudah di-hash dengan bcrypt (rounds=10)
--- Password asli: admin123
--- ================================================================
 
 USE `dashboard_smt`;
 
 -- ================================================================
--- INSERT USER DEFAULT
+-- AKUN ADMIN AWAL
 -- ================================================================
-INSERT INTO `users` (`nama`, `email`, `password`, `role`, `is_active`)
-VALUES
-  (
-    'Administrator',
-    'admin@smt.com',
-    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy',
-    'ADMIN',
-    1
-  ),
-  (
-    'Super User',
-    'superuser@smt.com',
-    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy',
-    'SUPER_USER',
-    1
-  ),
-  (
-    'User Biasa',
-    'user@smt.com',
-    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy',
-    'USER',
-    1
-  )
-ON DUPLICATE KEY UPDATE
-  `updated_at` = CURRENT_TIMESTAMP;
+-- Akun admin TIDAK dibuat lewat file ini (tidak ada kredensial di repo).
+-- Buat akun admin lewat seed resmi dengan password dari environment variable:
+--
+--   SEED_ADMIN_EMAIL=admin@smt.com SEED_ADMIN_PASSWORD=<password-kuat> npm run seed
+--
+-- (password minimal 12 karakter). Catatan: contoh audit_logs di bawah
+-- mengacu user_id 1 — jalankan hanya setelah akun admin pertama dibuat.
 
 
 -- ================================================================

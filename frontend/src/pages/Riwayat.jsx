@@ -68,16 +68,18 @@ export default function Riwayat() {
             <p className="text-xs text-brown-400 mt-0.5">sebelum PPN</p>
           </div>
         </div>
-        <div className="card flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
-            <TrendingUp className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+        {canSeeCogs() && (
+          <div className="card flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
+              <TrendingUp className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <p className="text-sm text-brown-500 dark:text-brown-400">Total Profit</p>
+              <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{formatRupiah(summary.totalProfit)}</p>
+              <p className="text-xs text-brown-400 mt-0.5">harga jual − COGS</p>
+            </div>
           </div>
-          <div>
-            <p className="text-sm text-brown-500 dark:text-brown-400">Total Profit</p>
-            <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{formatRupiah(summary.totalProfit)}</p>
-            <p className="text-xs text-brown-400 mt-0.5">harga jual − COGS</p>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Toolbar */}
@@ -132,7 +134,7 @@ export default function Riwayat() {
                 <th className="table-header text-right">Harga Jual</th>
                 <th className="table-header text-right">PPN</th>
                 <th className="table-header text-right">Total Harga</th>
-                <th className="table-header text-right">Profit</th>
+                {canSeeCogs() && <th className="table-header text-right">Profit</th>}
                 <th className="table-header">Perusahaan</th>
                 <th className="table-header">No. Invoice</th>
                 <th className="table-header">Customer</th>
@@ -143,13 +145,13 @@ export default function Riwayat() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={canSeeCogs() ? 17 : 16} className="text-center py-12 text-brown-400">
+                  <td colSpan={canSeeCogs() ? 17 : 15} className="text-center py-12 text-brown-400">
                     <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2" /> Memuat data...
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={canSeeCogs() ? 17 : 16} className="text-center py-12 text-brown-400">
+                  <td colSpan={canSeeCogs() ? 17 : 15} className="text-center py-12 text-brown-400">
                     <History className="w-10 h-10 mx-auto mb-2 opacity-40" />
                     Belum ada barang yang terjual
                   </td>
@@ -179,13 +181,15 @@ export default function Riwayat() {
                     <td className="table-cell text-right font-mono">{formatRupiah(item.hargaJual)}</td>
                     <td className="table-cell text-right font-mono text-brown-500">{formatRupiah(item.ppn)}</td>
                     <td className="table-cell text-right font-mono font-semibold">{formatRupiah(item.totalHarga)}</td>
-                    <td className="table-cell text-right font-mono">
-                      {item.profit ? (
-                        <span className={parseFloat(item.profit) >= 0 ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-red-500 font-semibold'}>
-                          {formatRupiah(item.profit)}
-                        </span>
-                      ) : '-'}
-                    </td>
+                    {canSeeCogs() && (
+                      <td className="table-cell text-right font-mono">
+                        {item.profit ? (
+                          <span className={parseFloat(item.profit) >= 0 ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : 'text-red-500 font-semibold'}>
+                            {formatRupiah(item.profit)}
+                          </span>
+                        ) : '-'}
+                      </td>
+                    )}
                     <td className="table-cell">
                       <span className={item.perusahaan === 'VOLARY' ? 'badge-gold' : 'badge-info'}>
                         {PERUSAHAAN_LABELS[item.perusahaan]}
@@ -279,7 +283,7 @@ export default function Riwayat() {
                   ['Harga Jual', formatRupiah(viewItem.hargaJual)],
                   ['PPN (1.1%)', formatRupiah(viewItem.ppn)],
                   ['Total Harga', formatRupiah(viewItem.totalHarga)],
-                  ['Profit', formatRupiah(viewItem.profit)],
+                  ...(canSeeCogs() ? [['Profit', formatRupiah(viewItem.profit)]] : []),
                 ].map(([k, v]) => (
                   <div key={k} className="flex justify-between py-2 border-b border-brown-50 dark:border-brown-800">
                     <dt className="text-sm text-brown-500 dark:text-brown-400">{k}</dt>
@@ -297,7 +301,7 @@ export default function Riwayat() {
                   {[
                     ['Nomor Invoice', viewItem.invoice.nomorInvoice],
                     ['Customer', viewItem.invoice.namaCustomer],
-                    ['No. Telepon', viewItem.invoice.noTelepon || '-'],
+                    ...(canSeeCogs() ? [['No. Telepon', viewItem.invoice.noTelepon || '-']] : []),
                     ['Tanggal Invoice', formatDate(viewItem.invoice.tanggalInvoice)],
                     ['Disetujui Oleh', viewItem.invoice.approvedByNama || '-'],
                     ['Tanggal Disetujui', viewItem.invoice.approvedAt ? formatDate(viewItem.invoice.approvedAt) : '-'],

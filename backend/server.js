@@ -39,6 +39,10 @@ const app = express();
 // Diperlukan agar req.ip akurat di belakang reverse proxy (Nginx)
 app.set('trust proxy', 1);
 
+// Parser query 'simple' → semua query param selalu string (M-02).
+// Mencegah injeksi objek filter Prisma via ?status[not]=x atau ?search[startsWith]=…
+app.set('query parser', 'simple');
+
 // ── Security headers ──
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // izinkan gambar katalog di-load frontend
@@ -79,8 +83,28 @@ const loginLimiter = rateLimit({
 });
 app.use('/api/auth/login', loginLimiter);
 
-// Serve uploaded images
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve uploaded images — hanya ekstensi gambar, dengan header anti-XSS (C-02).
+// File non-gambar (mis. .html/.js/.svg yang lolos ke disk) tidak akan pernah disajikan,
+// dan setiap file dikirim dengan CSP ketat + nosniff sehingga tidak bisa dieksekusi
+// sebagai script di origin aplikasi walau sempat ter-upload.
+const ALLOWED_UPLOAD_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+app.use(
+  '/uploads',
+  (req, res, next) => {
+    const ext = path.extname(req.path).toLowerCase();
+    if (!ALLOWED_UPLOAD_EXT.has(ext)) {
+      return res.status(404).json({ success: false, message: 'File tidak ditemukan' });
+    }
+    next();
+  },
+  express.static(path.join(__dirname, 'uploads'), {
+    setHeaders: (res) => {
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Disposition', 'inline');
+    },
+  })
+);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/items', itemRoutes);

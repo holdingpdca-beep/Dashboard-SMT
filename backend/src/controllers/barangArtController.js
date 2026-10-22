@@ -1,6 +1,9 @@
 const prisma = require('../utils/prisma');
 const { createAuditLog } = require('../utils/audit');
+const { toInt } = require('../utils/query');
 const XLSX = require('xlsx');
+
+const MAX_IMPORT_ROWS = 2000; // Batas baris import Excel sekali proses (L-02)
 
 const KATEGORI_VALID = ['LOGAM_MULIA', 'PERHIASAN'];
 const KATEGORI_LABEL = { LOGAM_MULIA: 'Logam Mulia', PERHIASAN: 'Perhiasan' };
@@ -58,13 +61,15 @@ const buildWhere = (kategori, query) => {
   return where;
 };
 
-const getItems = async (req, res) => {
+const getItems = async (req, res, next) => {
   try {
     const kategori = normalizeKategori(req.query.kategori);
     if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
 
-    const { page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const { sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const page = toInt(req.query.page, 1, 1, 1e9);
+    const limit = toInt(req.query.limit, 20, 1, 100);
+    const skip = (page - 1) * limit;
     const where = buildWhere(kategori, req.query);
 
     // Whitelist kolom sort agar aman (tidak langsung percaya input)
@@ -74,7 +79,7 @@ const getItems = async (req, res) => {
 
     const [total, items, totalBelum, totalTerjual, totalPerluKode] = await Promise.all([
       prisma.barangArt.count({ where }),
-      prisma.barangArt.findMany({ where, skip, take: parseInt(limit), orderBy: { [orderCol]: orderDir } }),
+      prisma.barangArt.findMany({ where, skip, take: limit, orderBy: { [orderCol]: orderDir } }),
       prisma.barangArt.count({ where: { kategori, status: 'BELUM_TERJUAL' } }),
       prisma.barangArt.count({ where: { kategori, status: 'TERJUAL' } }),
       prisma.barangArt.count({ where: { kategori, kodeBarang: '' } }),
@@ -84,24 +89,24 @@ const getItems = async (req, res) => {
       success: true,
       data: items,
       summary: { totalBelum, totalTerjual, totalPerluKode },
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) },
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const getItemById = async (req, res) => {
+const getItemById = async (req, res, next) => {
   try {
     const item = await prisma.barangArt.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
     res.json({ success: true, data: item });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const createItem = async (req, res) => {
+const createItem = async (req, res, next) => {
   try {
     const kategori = normalizeKategori(req.body.kategori);
     if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
@@ -138,11 +143,11 @@ const createItem = async (req, res) => {
 
     res.status(201).json({ success: true, message: 'Data berhasil ditambahkan', data: item });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const updateItem = async (req, res) => {
+const updateItem = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.barangArt.findUnique({ where: { id } });
@@ -174,7 +179,7 @@ const updateItem = async (req, res) => {
 
     res.json({ success: true, message: 'Data berhasil diperbarui', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
@@ -182,7 +187,7 @@ const updateItem = async (req, res) => {
 // Vendor, Nomor SKU, dan Tanggal Jual dipakai sama untuk seluruh batch.
 // Nominal Jual diisi per barang (lihat `items`).
 // Body: { tanggalJual, vendor, nomorSku, items: [{ id, nominalJual }, ...] }
-const markSold = async (req, res) => {
+const markSold = async (req, res, next) => {
   try {
     const { tanggalJual, vendor, nomorSku, keterangan, items } = req.body;
 
@@ -242,12 +247,12 @@ const markSold = async (req, res) => {
 
     res.json({ success: true, message: `${updated.length} barang ditandai terjual`, data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
 // Aksi: batalkan status terjual → kembali BELUM_TERJUAL (kosongkan tanggal & nominal)
-const revertSold = async (req, res) => {
+const revertSold = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.barangArt.findUnique({ where: { id } });
@@ -266,11 +271,11 @@ const revertSold = async (req, res) => {
 
     res.json({ success: true, message: 'Status terjual dibatalkan', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const deleteItem = async (req, res) => {
+const deleteItem = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.barangArt.findUnique({ where: { id } });
@@ -286,11 +291,11 @@ const deleteItem = async (req, res) => {
 
     res.json({ success: true, message: 'Data berhasil dihapus' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const exportExcel = async (req, res) => {
+const exportExcel = async (req, res, next) => {
   try {
     const kategori = normalizeKategori(req.query.kategori);
     if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
@@ -331,7 +336,7 @@ const exportExcel = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="Barang-ART-${KATEGORI_LABEL[kategori].replace(/\s+/g, '-')}-${Date.now()}.xlsx"`);
     res.send(buf);
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
@@ -353,7 +358,7 @@ function pickCol(row, aliases) {
 // Kolom Kode Barang opsional: bila di Excel sudah terisi langsung dipakai (barang siap dijual);
 // bila kosong, barang tetap masuk tapi Kode Barang wajib diisi manual dulu sebelum bisa dijual.
 // Semua baris masuk sebagai BELUM_TERJUAL.
-const importExcel = async (req, res) => {
+const importExcel = async (req, res, next) => {
   try {
     const kategori = normalizeKategori(req.body.kategori);
     if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
@@ -362,6 +367,10 @@ const importExcel = async (req, res) => {
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    if (rows.length > MAX_IMPORT_ROWS) {
+      return res.status(400).json({ success: false, message: `Jumlah baris (${rows.length}) melebihi batas ${MAX_IMPORT_ROWS}. Bagi file menjadi beberapa bagian.` });
+    }
 
     const toCreate = [];
     let gagal = 0;
@@ -424,7 +433,7 @@ const importExcel = async (req, res) => {
       data: { total: rows.length, berhasil, perluKode, gagal, errors },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 

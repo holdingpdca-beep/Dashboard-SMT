@@ -19,6 +19,12 @@ build/
 # Uploads (file gambar katalog yang diunggah user)
 backend/uploads/*
 !backend/uploads/.gitkeep
+uploads/
+!uploads/.gitkeep
+
+# Data bisnis / hasil export — JANGAN commit (M-08)
+*.xlsx
+*.xls
 
 # Logs
 logs/

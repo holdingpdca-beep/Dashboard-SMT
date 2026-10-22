@@ -1,9 +1,12 @@
 const prisma = require('../utils/prisma');
+const { toInt, safeDate } = require('../utils/query');
 
-const getAuditLogs = async (req, res) => {
+const getAuditLogs = async (req, res, next) => {
   try {
-    const { page = 1, limit = 50, search, startDate, endDate, aktivitas } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const { search, aktivitas, startDate, endDate } = req.query;
+    const page = toInt(req.query.page, 1, 1, 1e9);
+    const limit = toInt(req.query.limit, 50, 1, 100);
+    const skip = (page - 1) * limit;
     const where = {};
 
     if (search) {
@@ -13,10 +16,12 @@ const getAuditLogs = async (req, res) => {
       ];
     }
     if (aktivitas) where.aktivitas = { contains: aktivitas };
-    if (startDate || endDate) {
+    const sd = safeDate(startDate);
+    const ed = safeDate(endDate ? endDate + 'T23:59:59' : null);
+    if (sd || ed) {
       where.createdAt = {};
-      if (startDate) where.createdAt.gte = new Date(startDate);
-      if (endDate) where.createdAt.lte = new Date(endDate + 'T23:59:59');
+      if (sd) where.createdAt.gte = sd;
+      if (ed) where.createdAt.lte = ed;
     }
 
     const [total, logs] = await Promise.all([
@@ -24,7 +29,7 @@ const getAuditLogs = async (req, res) => {
       prisma.auditLog.findMany({
         where,
         skip,
-        take: parseInt(limit),
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: { user: { select: { id: true, nama: true, email: true, role: true } } },
       }),
@@ -33,10 +38,10 @@ const getAuditLogs = async (req, res) => {
     res.json({
       success: true,
       data: logs,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) },
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 

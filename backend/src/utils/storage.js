@@ -1,7 +1,39 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const OSS = require('ali-oss');
 const logger = require('./logger');
+
+// ── Whitelist tipe gambar (C-02) ──
+// Ekstensi file DITENTUKAN SERVER dari mimetype, bukan dari nama file client.
+const IMAGE_TYPES = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+};
+
+// Verifikasi "magic bytes" agar isi file benar-benar gambar
+// (bukan HTML/JS/SVG yang dibungkus dengan mimetype palsu).
+function cocokMagicBytes(buffer, mimetype) {
+  if (!buffer || buffer.length < 12) return false;
+  switch (mimetype) {
+    case 'image/jpeg':
+      return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    case 'image/png':
+      return (
+        buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+        buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a
+      );
+    case 'image/webp':
+      // "RIFF"...."WEBP"
+      return (
+        buffer.toString('ascii', 0, 4) === 'RIFF' &&
+        buffer.toString('ascii', 8, 12) === 'WEBP'
+      );
+    default:
+      return false;
+  }
+}
 
 // ── Deteksi konfigurasi OSS ──
 // Jika kredensial Alibaba Cloud OSS tersedia, gambar disimpan di cloud.
@@ -45,8 +77,18 @@ const LOCAL_ROOT = path.join(__dirname, '../..');
  * @returns {Promise<string>} URL/path gambar yang disimpan ke DB
  */
 async function simpanGambar(file, folder = 'katalog') {
-  const ext = path.extname(file.originalname) || '.jpg';
-  const filename = `${folder}_${Date.now()}${ext}`;
+  // Ekstensi dari mimetype yang di-whitelist — JANGAN percaya file.originalname (C-02)
+  const ext = IMAGE_TYPES[file.mimetype];
+  if (!ext) {
+    throw new Error('Tipe gambar tidak diizinkan (hanya JPG, PNG, WEBP)');
+  }
+  // Pastikan isi file benar-benar gambar sesuai mimetype-nya
+  if (!cocokMagicBytes(file.buffer, file.mimetype)) {
+    throw new Error('File bukan gambar yang valid');
+  }
+
+  // Nama acak (UUID-like) agar tidak bisa ditebak/dienumerasi (L-08)
+  const filename = `${folder}_${crypto.randomUUID()}${ext}`;
   const key = `${folder}/${filename}`;
 
   if (ossEnabled) {
@@ -95,4 +137,4 @@ async function hapusGambar(gambar) {
   }
 }
 
-module.exports = { simpanGambar, hapusGambar, ossEnabled };
+module.exports = { simpanGambar, hapusGambar, ossEnabled, IMAGE_TYPES };

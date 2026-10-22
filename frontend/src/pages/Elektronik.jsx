@@ -446,7 +446,7 @@ export default function Elektronik() {
               ['Harga Jual', formatRupiah(viewItem.hargaJual)],
               ['PPN (1.1%)', formatRupiah(viewItem.ppn)],
               ['Total Harga', formatRupiah(viewItem.totalHarga)],
-              ['Profit', formatRupiah(viewItem.profit)],
+              ...(canSeeCogs() ? [['Profit', formatRupiah(viewItem.profit)]] : []),
               ['Status', STATUS_LABELS[viewItem.status]],
               ['Perusahaan', PERUSAHAAN_LABELS[viewItem.perusahaan]],
               ['Tanggal Masuk', formatDate(viewItem.tanggalMasuk)],

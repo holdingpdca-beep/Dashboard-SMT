@@ -1,4 +1,5 @@
 const prisma = require('./prisma');
+const logger = require('./logger');
 
 async function createAuditLog({ userId, namaUser, aktivitas, tabel, dataLama, dataBaru, ipAddress }) {
   try {
@@ -14,7 +15,8 @@ async function createAuditLog({ userId, namaUser, aktivitas, tabel, dataLama, da
       },
     });
   } catch (err) {
-    console.error('Gagal membuat audit log:', err);
+    // Masuk ke winston (logs/error.log) agar kegagalan audit terpantau di production (M-09)
+    logger.error(`Gagal membuat audit log: ${err.message}`);
   }
 }
 

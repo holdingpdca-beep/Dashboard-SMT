@@ -104,12 +104,15 @@ Buka CMD, jalankan satu per satu:
   npm run dev
 
 ================================================================
-AKUN LOGIN DEFAULT
+AKUN ADMIN AWAL
 ================================================================
 
-  ADMIN      : admin@smt.com      / admin123
-  SUPER USER : superuser@smt.com  / admin123
-  USER BIASA : user@smt.com       / admin123
+  Seed hanya membuat SATU akun ADMIN. Password TIDAK disimpan di file ini —
+  set lewat environment variable saat menjalankan seed:
+
+    SEED_ADMIN_EMAIL=admin@smt.com SEED_ADMIN_PASSWORD=<password-kuat> npm run seed
+
+  (password minimal 12 karakter). Akun lain dibuat lewat menu Manajemen User.
 
 ================================================================
 DAFTAR ERROR DAN SOLUSINYA

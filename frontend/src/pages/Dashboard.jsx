@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import SummaryCards from '../components/Dashboard/SummaryCards'
 import { TrendProfitRugiChart, ProfitTable, RugiTable } from '../components/Dashboard/Charts'
 import { RefreshCw, Calendar, X } from 'lucide-react'
+import { useAuth } from '../contexts/AuthContext'
 
 const today = () => new Date().toISOString().split('T')[0]
 const firstDayOfMonth = (offset = 0) => {
@@ -26,6 +27,7 @@ const PRESETS = [
 ]
 
 export default function Dashboard() {
+  const { canSeeCogs } = useAuth()
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [perusahaan, setPerusahaan] = useState('')
@@ -146,14 +148,19 @@ export default function Dashboard() {
       {/* Summary Cards */}
       <SummaryCards stats={stats} loading={loading} />
 
-      {/* Trend Profit & Rugi Gabungan */}
-      <TrendProfitRugiChart profitData={stats?.trendProfit} rugiData={stats?.trendRugi} loading={loading} />
+      {/* Analisa profit/rugi hanya untuk role yang boleh melihat COGS (H-02) */}
+      {canSeeCogs() && (
+        <>
+          {/* Trend Profit & Rugi Gabungan */}
+          <TrendProfitRugiChart profitData={stats?.trendProfit} rugiData={stats?.trendRugi} loading={loading} />
 
-      {/* Tabel Profit per Bulan */}
-      <ProfitTable data={stats?.trendProfit} loading={loading} />
+          {/* Tabel Profit per Bulan */}
+          <ProfitTable data={stats?.trendProfit} loading={loading} />
 
-      {/* Tabel Rugi per Bulan */}
-      <RugiTable data={stats?.trendRugi} loading={loading} />
+          {/* Tabel Rugi per Bulan */}
+          <RugiTable data={stats?.trendRugi} loading={loading} />
+        </>
+      )}
 
       {/* Info bar */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
