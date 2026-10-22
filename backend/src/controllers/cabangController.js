@@ -1,6 +1,7 @@
 const prisma = require('../utils/prisma');
+const { createAuditLog } = require('../utils/audit');
 
-const getCabang = async (req, res) => {
+const getCabang = async (req, res, next) => {
   try {
     const { aktif } = req.query;
     const where = {};
@@ -12,22 +13,32 @@ const getCabang = async (req, res) => {
     });
     res.json({ success: true, data });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const createCabang = async (req, res) => {
+const createCabang = async (req, res, next) => {
   try {
     const { nama, alamat, storeName } = req.body;
     if (!nama) return res.status(400).json({ success: false, message: 'Nama cabang wajib diisi' });
     const data = await prisma.cabang.create({ data: { nama, alamat: alamat || null, storeName: storeName || null } });
+
+    await createAuditLog({
+      userId: req.user.id,
+      namaUser: req.user.nama,
+      aktivitas: `TAMBAH CABANG: ${data.nama}`,
+      tabel: 'Cabang',
+      dataBaru: { nama: data.nama, alamat: data.alamat, storeName: data.storeName },
+      ipAddress: req.ip,
+    });
+
     res.status(201).json({ success: true, data });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const updateCabang = async (req, res) => {
+const updateCabang = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const { nama, alamat, aktif, storeName } = req.body;
@@ -42,13 +53,24 @@ const updateCabang = async (req, res) => {
         ...(aktif !== undefined && { aktif: aktif === 'false' ? false : Boolean(aktif) }),
       },
     });
+
+    await createAuditLog({
+      userId: req.user.id,
+      namaUser: req.user.nama,
+      aktivitas: `EDIT CABANG: ${existing.nama}`,
+      tabel: 'Cabang',
+      dataLama: { nama: existing.nama, alamat: existing.alamat, storeName: existing.storeName, aktif: existing.aktif },
+      dataBaru: { nama: data.nama, alamat: data.alamat, storeName: data.storeName, aktif: data.aktif },
+      ipAddress: req.ip,
+    });
+
     res.json({ success: true, data });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const deleteCabang = async (req, res) => {
+const deleteCabang = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.cabang.findUnique({
@@ -63,9 +85,19 @@ const deleteCabang = async (req, res) => {
       });
     }
     await prisma.cabang.delete({ where: { id } });
+
+    await createAuditLog({
+      userId: req.user.id,
+      namaUser: req.user.nama,
+      aktivitas: `HAPUS CABANG: ${existing.nama}`,
+      tabel: 'Cabang',
+      dataLama: { nama: existing.nama, alamat: existing.alamat, storeName: existing.storeName },
+      ipAddress: req.ip,
+    });
+
     res.json({ success: true, message: 'Cabang berhasil dihapus' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 

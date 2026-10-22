@@ -1,6 +1,16 @@
 const prisma = require('../utils/prisma');
 const { createAuditLog } = require('../utils/audit');
+const { canSeeAll } = require('../middleware/roleCheck');
+const { toInt, pickSort, sortOrderOf, safeDate } = require('../utils/query');
 const XLSX = require('xlsx');
+
+// Kolom yang boleh dipakai untuk sortBy (M-02 / H-02).
+// cogs & profit HANYA untuk ADMIN/SUPER_USER agar tidak jadi oracle urutan COGS.
+const SORTABLE_BASE = ['createdAt', 'updatedAt', 'tanggalLelang', 'tanggalMasuk', 'nomorSbg', 'grade', 'hargaJual'];
+const SORTABLE_ADMIN = [...SORTABLE_BASE, 'cogs', 'profit'];
+
+// Batas maksimum baris import Excel sekali proses (L-02)
+const MAX_IMPORT_ROWS = 2000;
 
 // Parsing tanggal secara deterministik (tanpa pengaruh zona waktu).
 // Disimpan pada jam 12:00 UTC agar tanggal tidak pernah bergeser hari
@@ -57,19 +67,25 @@ const buildWhere = (query, userRole) => {
   if (status) where.status = status; // jika kosong → tampilkan semua status
   if (perusahaan) where.perusahaan = perusahaan;
   if (jenisBarang) where.jenisBarang = { contains: jenisBarang };
-  // Filter rentang tanggal lelang
-  if (startDate || endDate) {
+  // Filter rentang tanggal lelang (tanggal tak valid diabaikan, cegah crash — M-02)
+  const sd = safeDate(startDate);
+  const ed = safeDate(endDate ? endDate + 'T23:59:59' : null);
+  if (sd || ed) {
     where.tanggalLelang = {};
-    if (startDate) where.tanggalLelang.gte = new Date(startDate);
-    if (endDate) where.tanggalLelang.lte = new Date(endDate + 'T23:59:59');
+    if (sd) where.tanggalLelang.gte = sd;
+    if (ed) where.tanggalLelang.lte = ed;
   }
   return where;
 };
 
-const getItems = async (req, res) => {
+const getItems = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const page = toInt(req.query.page, 1, 1, 1e9);
+    const limit = toInt(req.query.limit, 20, 1, 100);
+    const allowedSort = canSeeAll(req.user) ? SORTABLE_ADMIN : SORTABLE_BASE;
+    const sortBy = pickSort(req.query.sortBy, allowedSort, 'createdAt');
+    const sortOrder = sortOrderOf(req.query.sortOrder);
+    const skip = (page - 1) * limit;
     const where = buildWhere(req.query, req.user.role);
 
     const [total, items] = await Promise.all([
@@ -77,40 +93,40 @@ const getItems = async (req, res) => {
       prisma.elektronik.findMany({
         where,
         skip,
-        take: parseInt(limit),
+        take: limit,
         orderBy: { [sortBy]: sortOrder },
       }),
     ]);
 
-    const hideCogs = req.user.role === 'USER';
-    const data = hideCogs ? items.map(i => { const { cogs, ...rest } = i; return rest; }) : items;
+    const hideCogs = !canSeeAll(req.user);
+    const data = hideCogs ? items.map(i => { const { cogs, profit, ...rest } = i; return rest; }) : items;
 
     res.json({
       success: true,
       data,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) },
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const getItemById = async (req, res) => {
+const getItemById = async (req, res, next) => {
   try {
     const item = await prisma.elektronik.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
 
-    if (req.user.role === 'USER') {
-      const { cogs, ...rest } = item;
+    if (!canSeeAll(req.user)) {
+      const { cogs, profit, ...rest } = item;
       return res.json({ success: true, data: rest });
     }
     res.json({ success: true, data: item });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const createItem = async (req, res) => {
+const createItem = async (req, res, next) => {
   try {
     const { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, offeringPengepul, hargaJual, perusahaan, tanggalLelang } = req.body;
 
@@ -156,11 +172,11 @@ const createItem = async (req, res) => {
 
     res.status(201).json({ success: true, message: 'Data berhasil ditambahkan', data: item });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const updateItem = async (req, res) => {
+const updateItem = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.elektronik.findUnique({ where: { id } });
@@ -216,11 +232,11 @@ const updateItem = async (req, res) => {
 
     res.json({ success: true, message: 'Data berhasil diperbarui', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const deleteItem = async (req, res) => {
+const deleteItem = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.elektronik.findUnique({ where: { id } });
@@ -248,20 +264,36 @@ const deleteItem = async (req, res) => {
 
     res.json({ success: true, message: 'Data berhasil dihapus' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const importExcel = async (req, res) => {
+const importExcel = async (req, res, next) => {
   try {
     const { mapping, perusahaan } = req.body;
-    const mappingObj = typeof mapping === 'string' ? JSON.parse(mapping) : mapping;
+    let mappingObj;
+    try {
+      mappingObj = typeof mapping === 'string' ? JSON.parse(mapping) : mapping;
+    } catch {
+      return res.status(400).json({ success: false, message: 'Format mapping kolom tidak valid' });
+    }
+    if (!mappingObj || typeof mappingObj !== 'object') {
+      return res.status(400).json({ success: false, message: 'Mapping kolom wajib diisi' });
+    }
 
     if (!req.file) return res.status(400).json({ success: false, message: 'File Excel tidak ditemukan' });
 
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet);
+
+    // Batasi jumlah baris agar import besar tidak membebani DB / request hang (L-02)
+    if (rows.length > MAX_IMPORT_ROWS) {
+      return res.status(400).json({
+        success: false,
+        message: `Jumlah baris (${rows.length}) melebihi batas ${MAX_IMPORT_ROWS}. Bagi file menjadi beberapa bagian.`,
+      });
+    }
 
     let berhasil = 0, gagal = 0, duplicate = 0;
     const errors = [];
@@ -308,8 +340,9 @@ const importExcel = async (req, res) => {
           berhasil++;
         }
       } catch (e) {
+        // Jangan bocorkan detail error internal Prisma ke client (M-01 / L-02)
         gagal++;
-        errors.push({ pesan: e.message });
+        errors.push({ pesan: 'Gagal memproses baris ini' });
       }
     }
 
@@ -327,16 +360,16 @@ const importExcel = async (req, res) => {
       data: { total: rows.length, berhasil, duplicate, gagal, errors },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const exportExcel = async (req, res) => {
+const exportExcel = async (req, res, next) => {
   try {
     const where = buildWhere(req.query, req.user.role);
     const items = await prisma.elektronik.findMany({ where, orderBy: { createdAt: 'desc' } });
 
-    const hideCogs = req.user.role === 'USER';
+    const hideCogs = !canSeeAll(req.user);
 
     const data = items.map((item, idx) => {
       const row = {
@@ -351,12 +384,15 @@ const exportExcel = async (req, res) => {
         'Harga Jual': item.hargaJual != null ? parseFloat(item.hargaJual) : '',
         'PPN (1.1%)': item.ppn != null ? parseFloat(item.ppn) : '',
         'Total Harga': item.totalHarga != null ? parseFloat(item.totalHarga) : '',
-        'Profit': item.profit != null ? parseFloat(item.profit) : '',
         Status: item.status === 'BELUM_TERJUAL' ? 'Belum Terjual' : 'Terjual',
         Perusahaan: item.perusahaan === 'VOLARY' ? 'Volary' : 'Serba Mas',
         'Tanggal Masuk': new Date(item.tanggalMasuk).toLocaleDateString('id-ID'),
       };
-      if (!hideCogs) row['COGS'] = parseFloat(item.cogs);
+      // COGS & Profit hanya untuk role yang berwenang (H-02)
+      if (!hideCogs) {
+        row['COGS'] = parseFloat(item.cogs);
+        row['Profit'] = item.profit != null ? parseFloat(item.profit) : '';
+      }
       return row;
     });
 
@@ -377,25 +413,27 @@ const exportExcel = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="Data-Elektronik-${Date.now()}.xlsx"`);
     res.send(buf);
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const getStats = async (req, res) => {
+const getStats = async (req, res, next) => {
   try {
     const { perusahaan, startDate, endDate } = req.query;
     const where = perusahaan ? { perusahaan } : {};
 
     // Periode dashboard difilter berdasarkan TANGGAL LELANG (bukan tanggal upload)
-    if (startDate || endDate) {
+    const sd = safeDate(startDate);
+    const ed = safeDate(endDate ? endDate + 'T23:59:59' : null);
+    if (sd || ed) {
       where.tanggalLelang = {};
-      if (startDate) where.tanggalLelang.gte = new Date(startDate);
-      if (endDate) where.tanggalLelang.lte = new Date(endDate + 'T23:59:59');
+      if (sd) where.tanggalLelang.gte = sd;
+      if (ed) where.tanggalLelang.lte = ed;
     }
 
     // Rentang untuk trend chart
-    const trendStart = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const trendEnd = endDate ? new Date(endDate + 'T23:59:59') : new Date();
+    const trendStart = sd || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const trendEnd = ed || new Date();
 
     const trendQuery = perusahaan
       ? prisma.$queryRaw`SELECT DATE(tanggal_masuk) as tanggal, CAST(COUNT(*) AS UNSIGNED) as jumlah FROM elektronik WHERE tanggal_masuk >= ${trendStart} AND tanggal_masuk <= ${trendEnd} AND perusahaan = ${perusahaan} GROUP BY DATE(tanggal_masuk) ORDER BY tanggal`
@@ -480,39 +518,53 @@ const getStats = async (req, res) => {
     });
     const trendRugi = Object.values(byMonthRugi).sort((a, b) => a.bulan.localeCompare(b.bulan));
 
-    res.json({
-      success: true,
-      data: {
-        totalSbg,
-        totalCogs: parseFloat(totalCogs._sum.cogs || 0),
-        totalHargaJual: totalHargaJualNum,
-        totalProfit: totalProfitNum,
-        persentaseProfit: parseFloat(persentaseProfit),
-        // Profit terealisasi (barang TERJUAL) vs proyeksi (BELUM_TERJUAL)
-        profitRiil: profitRiilNum,
-        hargaJualRiil: hargaJualRiilNum,
-        marginRiil,
-        profitProyeksi: profitProyeksiNum,
-        hargaJualProyeksi: hargaJualProyeksiNum,
-        totalTerjual,
-        totalBelumTerjual: totalSbg - totalTerjual,
-        gradeDistribution,
-        topProfit,
-        topHargaJual,
-        trendHarian: trendHarianSafe,
-        trendProfit,
-        trendRugi,
-      },
-    });
+    const payload = {
+      totalSbg,
+      totalCogs: parseFloat(totalCogs._sum.cogs || 0),
+      totalHargaJual: totalHargaJualNum,
+      totalProfit: totalProfitNum,
+      persentaseProfit: parseFloat(persentaseProfit),
+      // Profit terealisasi (barang TERJUAL) vs proyeksi (BELUM_TERJUAL)
+      profitRiil: profitRiilNum,
+      hargaJualRiil: hargaJualRiilNum,
+      marginRiil,
+      profitProyeksi: profitProyeksiNum,
+      hargaJualProyeksi: hargaJualProyeksiNum,
+      totalTerjual,
+      totalBelumTerjual: totalSbg - totalTerjual,
+      gradeDistribution,
+      topProfit,
+      topHargaJual,
+      trendHarian: trendHarianSafe,
+      trendProfit,
+      trendRugi,
+    };
+
+    // Sembunyikan metrik COGS & profit dari role non-admin (H-02).
+    if (!canSeeAll(req.user)) {
+      payload.totalCogs = null;
+      payload.totalProfit = null;
+      payload.persentaseProfit = null;
+      payload.profitRiil = null;
+      payload.marginRiil = null;
+      payload.profitProyeksi = null;
+      payload.topProfit = [];
+      payload.trendProfit = [];
+      payload.trendRugi = [];
+    }
+
+    res.json({ success: true, data: payload });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const getRiwayat = async (req, res) => {
+const getRiwayat = async (req, res, next) => {
   try {
-    const { perusahaan, search, page = 1, limit = 50 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const { perusahaan, search } = req.query;
+    const page = toInt(req.query.page, 1, 1, 1e9);
+    const limit = toInt(req.query.limit, 50, 1, 100);
+    const skip = (page - 1) * limit;
 
     const where = { status: 'TERJUAL' };
     if (perusahaan) where.perusahaan = perusahaan;
@@ -537,7 +589,7 @@ const getRiwayat = async (req, res) => {
       prisma.elektronik.findMany({
         where,
         skip,
-        take: parseInt(limit),
+        take: limit,
         orderBy: { updatedAt: 'desc' },
         include: {
           invoiceItems: {
@@ -551,19 +603,33 @@ const getRiwayat = async (req, res) => {
       }),
     ]);
 
+    const bolehLihatSemua = canSeeAll(req.user);
+
+    // Sembunyikan COGS, profit, dan nomor telepon customer dari role non-admin (H-02 / UU PDP)
+    const dataAman = bolehLihatSemua ? items : items.map((item) => {
+      const { cogs, profit, offeringPengepul, ...rest } = item;
+      if (Array.isArray(rest.invoiceItems)) {
+        rest.invoiceItems = rest.invoiceItems.map((ii) => ({
+          ...ii,
+          invoice: ii.invoice ? { ...ii.invoice, noTelepon: null } : ii.invoice,
+        }));
+      }
+      return rest;
+    });
+
     res.json({
       success: true,
-      data: items,
+      data: dataAman,
       summary: {
         totalBarang: total,
-        totalProfit: parseFloat(agregat._sum.profit || 0),
+        totalProfit: bolehLihatSemua ? parseFloat(agregat._sum.profit || 0) : null,
         totalHargaJual: parseFloat(agregat._sum.hargaJual || 0),
         totalNilai: parseFloat(agregat._sum.totalHarga || 0),
       },
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) },
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 

@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { requireRole } = require('../middleware/roleCheck');
+const { requireRole, ELEKTRONIK_ROLES } = require('../middleware/roleCheck');
 const { handleValidation } = require('../middleware/validate');
 const { createItemRules, updateItemRules } = require('../middleware/validators');
 const { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat } = require('../controllers/itemController');
@@ -22,14 +22,17 @@ const upload = multer({
   },
 });
 
-router.get('/stats', auth, getStats);
-router.get('/export', auth, exportExcel);
-router.get('/riwayat', auth, getRiwayat);
-router.get('/', auth, getItems);
-router.get('/:id', auth, getItemById);
-router.post('/', auth, requireRole('ADMIN', 'SUPER_USER'), createItemRules, handleValidation, createItem);
-router.put('/:id', auth, requireRole('ADMIN', 'SUPER_USER'), updateItemRules, handleValidation, updateItem);
-router.delete('/:id', auth, requireRole('ADMIN', 'SUPER_USER'), deleteItem);
-router.post('/import/excel', auth, requireRole('ADMIN', 'SUPER_USER'), upload.single('file'), importExcel);
+// Modul elektronik hanya untuk ADMIN/SUPER_USER/USER — KATALOG_USER dikecualikan (H-01)
+router.use(auth, requireRole(...ELEKTRONIK_ROLES));
+
+router.get('/stats', getStats);
+router.get('/export', exportExcel);
+router.get('/riwayat', getRiwayat);
+router.get('/', getItems);
+router.get('/:id', getItemById);
+router.post('/', requireRole('ADMIN', 'SUPER_USER'), createItemRules, handleValidation, createItem);
+router.put('/:id', requireRole('ADMIN', 'SUPER_USER'), updateItemRules, handleValidation, updateItem);
+router.delete('/:id', requireRole('ADMIN', 'SUPER_USER'), deleteItem);
+router.post('/import/excel', requireRole('ADMIN', 'SUPER_USER'), upload.single('file'), importExcel);
 
 module.exports = router;

@@ -49,7 +49,11 @@ const createKatalog = async (req, res) => {
     }
     let gambar = null;
     if (req.file) {
-      gambar = await simpanGambar(req.file, 'katalog');
+      try {
+        gambar = await simpanGambar(req.file, 'katalog');
+      } catch (imgErr) {
+        return res.status(400).json({ success: false, message: imgErr.message });
+      }
     }
     const item = await prisma.katalogEmas.create({
       data: {
@@ -64,6 +68,16 @@ const createKatalog = async (req, res) => {
         urutan: urutan ? parseInt(urutan) : 0,
       },
     });
+
+    await createAuditLog({
+      userId: req.user?.id,
+      namaUser: req.user?.nama,
+      aktivitas: `TAMBAH KATALOG: ${item.nama}`,
+      tabel: 'katalog_emas',
+      dataBaru: { nama: item.nama, kategori: item.kategori, harga: item.harga },
+      ipAddress: req.ip,
+    });
+
     res.status(201).json({ success: true, data: item });
   } catch (err) {
     console.error(err);
@@ -81,9 +95,15 @@ const updateKatalog = async (req, res) => {
     let gambar = existing.gambar;
 
     if (req.file) {
-      // Hapus gambar lama jika ada (OSS atau lokal, terdeteksi otomatis)
+      // Validasi & simpan gambar baru DULU; baru hapus yang lama bila sukses (C-02)
+      let gambarBaru;
+      try {
+        gambarBaru = await simpanGambar(req.file, 'katalog');
+      } catch (imgErr) {
+        return res.status(400).json({ success: false, message: imgErr.message });
+      }
       if (existing.gambar) await hapusFileGambar(existing.gambar);
-      gambar = await simpanGambar(req.file, 'katalog');
+      gambar = gambarBaru;
     }
 
     const item = await prisma.katalogEmas.update({
@@ -100,6 +120,17 @@ const updateKatalog = async (req, res) => {
         gambar,
       },
     });
+
+    await createAuditLog({
+      userId: req.user?.id,
+      namaUser: req.user?.nama,
+      aktivitas: `EDIT KATALOG: ${item.nama}`,
+      tabel: 'katalog_emas',
+      dataLama: { nama: existing.nama, kategori: existing.kategori, harga: existing.harga },
+      dataBaru: { nama: item.nama, kategori: item.kategori, harga: item.harga },
+      ipAddress: req.ip,
+    });
+
     res.json({ success: true, data: item });
   } catch (err) {
     console.error(err);
@@ -115,6 +146,16 @@ const deleteKatalog = async (req, res) => {
 
     if (existing.gambar) await hapusFileGambar(existing.gambar);
     await prisma.katalogEmas.delete({ where: { id } });
+
+    await createAuditLog({
+      userId: req.user?.id,
+      namaUser: req.user?.nama,
+      aktivitas: `HAPUS KATALOG: ${existing.nama}`,
+      tabel: 'katalog_emas',
+      dataLama: { nama: existing.nama, kategori: existing.kategori, harga: existing.harga },
+      ipAddress: req.ip,
+    });
+
     res.json({ success: true, message: 'Item berhasil dihapus' });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Gagal menghapus item' });
@@ -167,7 +208,7 @@ const syncKatalog = async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, message: err.message || 'Gagal menjalankan sinkronisasi' });
+    res.status(500).json({ success: false, message: 'Gagal menjalankan sinkronisasi' });
   }
 };
 
@@ -193,7 +234,7 @@ const previewSync = async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, message: err.message || 'Gagal mengambil preview data API' });
+    res.status(500).json({ success: false, message: 'Gagal mengambil preview data API' });
   }
 };
 

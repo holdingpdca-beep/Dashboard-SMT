@@ -1,5 +1,14 @@
 const prisma = require('../utils/prisma');
 const { createAuditLog } = require('../utils/audit');
+const { canSeeAll } = require('../middleware/roleCheck');
+const { toInt } = require('../utils/query');
+
+// Field elektronik yang aman ditampilkan di detail invoice (tanpa COGS/profit) — H-02
+const ELEKTRONIK_PUBLIC_SELECT = {
+  id: true, nomorSbg: true, grade: true, jenisBarang: true,
+  detailBarang: true, keterangan: true, hargaJual: true, ppn: true,
+  totalHarga: true, status: true, perusahaan: true, tanggalLelang: true,
+};
 
 async function kirimNotifikasi({ userIds, judul, pesan, tipe, invoiceId }) {
   if (!userIds || userIds.length === 0) return;
@@ -62,13 +71,16 @@ async function validasiBarangInvoice(idList, excludeInvoiceId = null) {
   return { items };
 }
 
-const getInvoices = async (req, res) => {
+const getInvoices = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, status, search, perusahaan } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const { status, search, perusahaan } = req.query;
+    const page = toInt(req.query.page, 1, 1, 1e9);
+    const limit = toInt(req.query.limit, 20, 1, 100);
+    const skip = (page - 1) * limit;
     const where = {};
 
-    if (req.user.role === 'USER') where.createdById = req.user.id;
+    // Whitelist: hanya ADMIN/SUPER_USER yang melihat semua invoice (H-01)
+    if (!canSeeAll(req.user)) where.createdById = req.user.id;
     if (status) where.status = status;
     if (perusahaan) where.perusahaan = perusahaan;
     if (search) {
@@ -83,7 +95,7 @@ const getInvoices = async (req, res) => {
       prisma.invoice.findMany({
         where,
         skip,
-        take: parseInt(limit),
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
           createdBy: { select: { id: true, nama: true } },
@@ -95,33 +107,37 @@ const getInvoices = async (req, res) => {
     res.json({
       success: true,
       data: invoices,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(total / parseInt(limit)) },
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const getInvoiceById = async (req, res) => {
+const getInvoiceById = async (req, res, next) => {
   try {
     const invoice = await prisma.invoice.findUnique({
       where: { id: parseInt(req.params.id) },
       include: {
         createdBy: { select: { id: true, nama: true } },
-        items: { include: { elektronik: true } },
+        // Hanya ADMIN/SUPER_USER yang boleh melihat COGS di item (H-02)
+        items: { include: { elektronik: canSeeAll(req.user) ? true : { select: ELEKTRONIK_PUBLIC_SELECT } } },
       },
     });
     if (!invoice) return res.status(404).json({ success: false, message: 'Invoice tidak ditemukan' });
-    if (req.user.role === 'USER' && invoice.createdById !== req.user.id) {
+    // Whitelist kepemilikan: non-admin hanya boleh invoice miliknya (H-01).
+    // Karena kepemilikan sudah dijamin, data customer invoice miliknya sendiri
+    // tetap boleh ia lihat; COGS di item tetap disembunyikan lewat select di atas.
+    if (!canSeeAll(req.user) && invoice.createdById !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Akses ditolak' });
     }
     res.json({ success: true, data: invoice });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const createInvoice = async (req, res) => {
+const createInvoice = async (req, res, next) => {
   try {
     const { namaCustomer, noTelepon, tanggalInvoice, perusahaan, catatan, itemIds } = req.body;
 
@@ -186,11 +202,11 @@ const createInvoice = async (req, res) => {
 
     res.status(201).json({ success: true, message: `Invoice ${invoice.nomorInvoice} berhasil dibuat`, data: invoice });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const updateInvoice = async (req, res) => {
+const updateInvoice = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const invoice = await prisma.invoice.findUnique({ where: { id } });
@@ -200,7 +216,7 @@ const updateInvoice = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invoice tidak dapat diedit pada status ini' });
     }
 
-    if (req.user.role === 'USER' && invoice.createdById !== req.user.id) {
+    if (!canSeeAll(req.user) && invoice.createdById !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Akses ditolak' });
     }
 
@@ -217,14 +233,25 @@ const updateInvoice = async (req, res) => {
       },
     });
 
+    // Catat perubahan data invoice ke audit trail (M-09)
+    await createAuditLog({
+      userId: req.user.id,
+      namaUser: req.user.nama,
+      aktivitas: `EDIT INVOICE ${invoice.nomorInvoice}`,
+      tabel: 'Invoice',
+      dataLama: { namaCustomer: invoice.namaCustomer, noTelepon: invoice.noTelepon, tanggalInvoice: invoice.tanggalInvoice, perusahaan: invoice.perusahaan, catatan: invoice.catatan },
+      dataBaru: { namaCustomer: updated.namaCustomer, noTelepon: updated.noTelepon, tanggalInvoice: updated.tanggalInvoice, perusahaan: updated.perusahaan, catatan: updated.catatan },
+      ipAddress: req.ip,
+    });
+
     res.json({ success: true, message: 'Invoice berhasil diperbarui', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
 // Ganti/atur ulang daftar barang pada invoice DRAFT atau REJECTED (M-01)
-const updateInvoiceItems = async (req, res) => {
+const updateInvoiceItems = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const { itemIds } = req.body;
@@ -235,7 +262,7 @@ const updateInvoiceItems = async (req, res) => {
     if (!['DRAFT', 'REJECTED'].includes(invoice.status)) {
       return res.status(400).json({ success: false, message: 'Item hanya dapat diubah pada invoice Draft atau Ditolak' });
     }
-    if (req.user.role === 'USER' && invoice.createdById !== req.user.id) {
+    if (!canSeeAll(req.user) && invoice.createdById !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Akses ditolak' });
     }
     if (!Array.isArray(itemIds) || itemIds.length === 0) {
@@ -277,11 +304,11 @@ const updateInvoiceItems = async (req, res) => {
 
     res.json({ success: true, message: 'Daftar barang invoice berhasil diperbarui', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const submitApproval = async (req, res) => {
+const submitApproval = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const invoice = await prisma.invoice.findUnique({ where: { id } });
@@ -289,6 +316,11 @@ const submitApproval = async (req, res) => {
 
     if (!['DRAFT', 'REJECTED'].includes(invoice.status)) {
       return res.status(400).json({ success: false, message: 'Invoice sudah disubmit sebelumnya' });
+    }
+
+    // Hanya pembuat atau ADMIN/SUPER_USER yang boleh submit (M-04)
+    if (!canSeeAll(req.user) && invoice.createdById !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Akses ditolak' });
     }
 
     const updated = await prisma.invoice.update({
@@ -316,11 +348,11 @@ const submitApproval = async (req, res) => {
 
     res.json({ success: true, message: 'Invoice berhasil disubmit untuk approval', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const approveInvoice = async (req, res) => {
+const approveInvoice = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const invoice = await prisma.invoice.findUnique({ where: { id }, include: { items: true } });
@@ -335,16 +367,29 @@ const approveInvoice = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Tidak dapat menyetujui invoice yang dibuat sendiri' });
     }
 
-    // Transaction: update invoice + tandai semua barang sebagai TERJUAL
-    await prisma.$transaction([
-      prisma.invoice.update({
-        where: { id },
+    const elektronikIds = invoice.items.map(i => i.elektronikId);
+
+    // Interactive transaction + pengecekan atomik (M-03):
+    // - approve hanya berhasil bila invoice masih WAITING_APPROVAL (cegah double-approve)
+    // - semua barang harus masih BELUM_TERJUAL (cegah satu barang terjual di 2 invoice)
+    await prisma.$transaction(async (tx) => {
+      const approve = await tx.invoice.updateMany({
+        where: { id, status: 'WAITING_APPROVAL' },
         data: { status: 'APPROVED', approvedById: req.user.id, approvedByNama: req.user.nama, approvedAt: new Date() },
-      }),
-      ...invoice.items.map(item =>
-        prisma.elektronik.update({ where: { id: item.elektronikId }, data: { status: 'TERJUAL' } })
-      ),
-    ]);
+      });
+      if (approve.count !== 1) {
+        throw Object.assign(new Error('Invoice sudah diproses oleh orang lain'), { status: 409 });
+      }
+
+      const jual = await tx.elektronik.updateMany({
+        where: { id: { in: elektronikIds }, status: 'BELUM_TERJUAL' },
+        data: { status: 'TERJUAL' },
+      });
+      if (jual.count !== elektronikIds.length) {
+        // Salah satu barang sudah terjual di invoice lain → batalkan seluruh transaksi
+        throw Object.assign(new Error('Sebagian barang sudah terjual di invoice lain. Approval dibatalkan.'), { status: 409 });
+      }
+    });
 
     const updated = await prisma.invoice.findUnique({ where: { id } });
 
@@ -367,11 +412,11 @@ const approveInvoice = async (req, res) => {
 
     res.json({ success: true, message: 'Invoice disetujui, barang ditandai TERJUAL', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const rejectInvoice = async (req, res) => {
+const rejectInvoice = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const { alasan } = req.body;
@@ -406,11 +451,11 @@ const rejectInvoice = async (req, res) => {
 
     res.json({ success: true, message: 'Invoice ditolak', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const printInvoice = async (req, res) => {
+const printInvoice = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const invoice = await prisma.invoice.findUnique({ where: { id } });
@@ -418,6 +463,11 @@ const printInvoice = async (req, res) => {
 
     if (invoice.status !== 'APPROVED') {
       return res.status(400).json({ success: false, message: 'Invoice belum disetujui' });
+    }
+
+    // Hanya pembuat atau ADMIN/SUPER_USER yang boleh menandai PRINTED (M-04)
+    if (!canSeeAll(req.user) && invoice.createdById !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Akses ditolak' });
     }
 
     const updated = await prisma.invoice.update({
@@ -435,11 +485,11 @@ const printInvoice = async (req, res) => {
 
     res.json({ success: true, message: 'Invoice dicetak, status barang diperbarui', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const deleteInvoice = async (req, res) => {
+const deleteInvoice = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const invoice = await prisma.invoice.findUnique({ where: { id } });
@@ -450,7 +500,7 @@ const deleteInvoice = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Hanya invoice berstatus Draft yang dapat dihapus' });
     }
 
-    if (req.user.role === 'USER' && invoice.createdById !== req.user.id) {
+    if (!canSeeAll(req.user) && invoice.createdById !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Akses ditolak' });
     }
 
@@ -468,11 +518,11 @@ const deleteInvoice = async (req, res) => {
 
     res.json({ success: true, message: 'Invoice berhasil dihapus' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const cancelInvoice = async (req, res) => {
+const cancelInvoice = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const { alasan } = req.body;
@@ -516,7 +566,7 @@ const cancelInvoice = async (req, res) => {
 
     res.json({ success: true, message: 'Invoice dibatalkan, barang dikembalikan ke status Belum Terjual', data: updated });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 

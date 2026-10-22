@@ -1,6 +1,6 @@
 const prisma = require('../utils/prisma');
 
-const getNotifikasi = async (req, res) => {
+const getNotifikasi = async (req, res, next) => {
   try {
     const { hanya_belum_dibaca } = req.query;
     const where = { userId: req.user.id };
@@ -17,22 +17,22 @@ const getNotifikasi = async (req, res) => {
 
     res.json({ success: true, data, jumlahBelumDibaca });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const getJumlahBelumDibaca = async (req, res) => {
+const getJumlahBelumDibaca = async (req, res, next) => {
   try {
     const count = await prisma.notifikasi.count({
       where: { userId: req.user.id, dibaca: false },
     });
     res.json({ success: true, jumlah: count });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const bacaNotifikasi = async (req, res) => {
+const bacaNotifikasi = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const notif = await prisma.notifikasi.findUnique({ where: { id } });
@@ -42,11 +42,11 @@ const bacaNotifikasi = async (req, res) => {
     await prisma.notifikasi.update({ where: { id }, data: { dibaca: true } });
     res.json({ success: true, message: 'Notifikasi ditandai sudah dibaca' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
-const bacaSemuaNotifikasi = async (req, res) => {
+const bacaSemuaNotifikasi = async (req, res, next) => {
   try {
     await prisma.notifikasi.updateMany({
       where: { userId: req.user.id, dibaca: false },
@@ -54,7 +54,7 @@ const bacaSemuaNotifikasi = async (req, res) => {
     });
     res.json({ success: true, message: 'Semua notifikasi ditandai sudah dibaca' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
