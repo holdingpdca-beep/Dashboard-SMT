@@ -30,7 +30,7 @@ const DEFAULT_FORM = {
   urutan: 0,
 }
 
-const DEFAULT_CABANG_FORM = { nama: '', alamat: '' }
+const DEFAULT_CABANG_FORM = { nama: '', alamat: '', storeName: '' }
 
 /* ─── KatalogCard ─── */
 function KatalogCard({ item, canManage, onEdit, onDelete, onToggle }) {
@@ -285,7 +285,7 @@ function ModalKelolaCabang({ cabangList, onRefresh, onClose }) {
 
   const openEdit = (c) => {
     setEditCabang(c)
-    setFormCabang({ nama: c.nama, alamat: c.alamat || '' })
+    setFormCabang({ nama: c.nama, alamat: c.alamat || '', storeName: c.storeName || '' })
   }
 
   const resetForm = () => {
@@ -363,6 +363,19 @@ function ModalKelolaCabang({ cabangList, onRefresh, onClose }) {
             placeholder="Alamat cabang (opsional)"
           />
         </div>
+        <div>
+          <label className="label">Nama Toko (untuk Sinkronisasi API)</label>
+          <input
+            type="text"
+            value={formCabang.storeName}
+            onChange={e => setFormCabang(f => ({ ...f, storeName: e.target.value }))}
+            className="input-field"
+            placeholder="Contoh: TOKO CABANG AMPENAN"
+          />
+          <p className="text-[11px] text-brown-400 mt-1">
+            Harus persis sama dengan nama toko di sistem SERBAMAS. Kosongkan bila cabang ini tidak disinkronkan.
+          </p>
+        </div>
         <div className="flex gap-2">
           {editCabang && (
             <button type="button" onClick={resetForm} className="btn-outline flex-1">Batal</button>
@@ -404,6 +417,13 @@ function ModalKelolaCabang({ cabangList, onRefresh, onClose }) {
                 </div>
                 {c.alamat && <p className="text-xs text-brown-400 mt-0.5 line-clamp-1">{c.alamat}</p>}
                 <p className="text-xs text-brown-400 mt-0.5">{c._count?.katalog ?? 0} item katalog</p>
+                {c.storeName ? (
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5 flex items-center gap-1">
+                    <Download className="w-3 h-3" /> Sinkron: {c.storeName}
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-brown-300 dark:text-brown-600 mt-0.5">Belum disinkronkan (Nama Toko kosong)</p>
+                )}
               </div>
               <div className="flex gap-1 shrink-0">
                 <button
@@ -782,6 +802,7 @@ export default function Katalog() {
   const [deleteItem, setDeleteItem] = useState(null)
   const [showKelolaCabang, setShowKelolaCabang] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   const fetchCabang = useCallback(async () => {
     try {
@@ -906,6 +927,29 @@ export default function Katalog() {
     }
   }
 
+  const handleSync = async () => {
+    setSyncing(true)
+    const loadingToast = toast.loading('Menyinkronkan dengan stok toko...')
+    try {
+      const { data } = await api.post('/katalog/sync')
+      toast.dismiss(loadingToast)
+      if (data.success) {
+        toast.success(data.message, { duration: 6000 })
+      } else {
+        // Sebagian cabang mungkin gagal (mis. password/Nama Toko belum di-set)
+        const pesanError = (data.error || []).map(e => `${e.cabang}: ${e.pesan}`).join('\n')
+        toast.error(`${data.message}\n${pesanError}`.trim(), { duration: 8000 })
+      }
+      fetchKatalog()
+      fetchCabang()
+    } catch (err) {
+      toast.dismiss(loadingToast)
+      toast.error(err.response?.data?.message || 'Gagal menjalankan sinkronisasi')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const jenisList = kategori === 'LM' ? JENIS_LM : kategori === 'PERHIASAN' ? JENIS_PERHIASAN : [...JENIS_PERHIASAN, ...JENIS_LM]
   const filtered = items.filter(item => {
     if (jenisFilter && item.jenisBarang !== jenisFilter) return false
@@ -969,6 +1013,19 @@ export default function Katalog() {
           ))}
 
           <div className="ml-auto flex items-center gap-2">
+            {/* Sinkronkan dengan stok toko (API SERBAMAS) */}
+            {canManage && (
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 hover:bg-emerald-400 text-white transition-colors shadow-sm disabled:opacity-60"
+                title="Tarik data stok terbaru dari toko. Barang yang stoknya habis akan otomatis terhapus."
+              >
+                <Download className={`w-3.5 h-3.5 ${syncing ? 'animate-pulse' : ''}`} />
+                {syncing ? 'Menyinkronkan...' : 'Sinkronkan Sekarang'}
+              </button>
+            )}
+
             {/* Layar penuh */}
             <button
               onClick={() => setFullscreen(true)}

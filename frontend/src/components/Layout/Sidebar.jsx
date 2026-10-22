@@ -1,17 +1,23 @@
+import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Package, FileText, History, Users, ScrollText, LogOut, ChevronRight, Gem } from 'lucide-react'
+import { LayoutDashboard, Package, FileText, History, Users, ScrollText, LogOut, ChevronRight, ChevronDown, Gem, Boxes, Coins, Sparkles, Tv } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 
-const navItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
+// Menu level atas
+const dashboardItem = { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true }
+const katalogItem = { to: '/katalog', label: 'Katalog Emas', icon: Gem }
+
+// Grup Elektronik — dropdown berisi Data Elektronik, Invoice, Riwayat
+const elektronikItems = [
   { to: '/elektronik', label: 'Data Elektronik', icon: Package },
   { to: '/invoice', label: 'Invoice', icon: FileText },
   { to: '/riwayat', label: 'Riwayat Penjualan', icon: History },
-  { to: '/katalog', label: 'Katalog Emas', icon: Gem },
 ]
 
-const katalogItems = [
-  { to: '/katalog', label: 'Katalog Emas', icon: Gem },
+// Grup Barang ART (khusus ADMIN) — dropdown dengan 2 sub-menu
+const barangArtItems = [
+  { to: '/barang-art/logam-mulia', label: 'Logam Mulia', icon: Coins },
+  { to: '/barang-art/perhiasan', label: 'Perhiasan', icon: Sparkles },
 ]
 
 const adminItems = [
@@ -19,13 +25,76 @@ const adminItems = [
   { to: '/audit', label: 'Audit Log', icon: ScrollText, role: 'SUPER_USER' },
 ]
 
+// Dropdown menu yang bisa dipakai ulang (Elektronik, Barang ART, dll)
+function NavGroup({ label, icon: Icon, items, collapsed }) {
+  const location = useLocation()
+  const groupActive = items.some(s => location.pathname === s.to || location.pathname.startsWith(s.to + '/'))
+  const [open, setOpen] = useState(groupActive)
+
+  const subActiveOf = (sub) => location.pathname === sub.to || location.pathname.startsWith(sub.to + '/')
+
+  if (collapsed) {
+    return (
+      <>
+        <div className="border-t border-brown-800/50 my-2" />
+        {items.map(sub => {
+          const SubIcon = sub.icon
+          const active = subActiveOf(sub)
+          return (
+            <NavLink key={sub.to} to={sub.to} className={`sidebar-link ${active ? 'active' : ''}`} title={`${label} — ${sub.label}`}>
+              <SubIcon className={`w-5 h-5 flex-shrink-0 ${active ? 'text-gold-400' : ''}`} />
+            </NavLink>
+          )
+        })}
+      </>
+    )
+  }
+
+  return (
+    <div>
+      <button onClick={() => setOpen(o => !o)} className={`sidebar-link w-full ${groupActive ? 'active' : ''}`}>
+        <Icon className={`w-5 h-5 flex-shrink-0 ${groupActive ? 'text-gold-400' : ''}`} />
+        <span className="text-sm font-medium">{label}</span>
+        <ChevronDown className={`w-4 h-4 ml-auto transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="ml-4 mt-1 space-y-1 border-l border-brown-800/50 pl-2">
+          {items.map(sub => {
+            const SubIcon = sub.icon
+            const active = subActiveOf(sub)
+            return (
+              <NavLink key={sub.to} to={sub.to} className={`sidebar-link ${active ? 'active' : ''}`}>
+                <SubIcon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-gold-400' : ''}`} />
+                <span className="text-sm font-medium">{sub.label}</span>
+              </NavLink>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Sidebar({ collapsed, onToggle }) {
-  const { user, logout, canManageUsers, isSuperUser, isKatalogOnly } = useAuth()
+  const { user, logout, isAdmin, canManageUsers, isSuperUser, isKatalogOnly } = useAuth()
   const location = useLocation()
 
-  const visibleNavItems = isKatalogOnly() ? katalogItems : navItems
+  const katalogOnly = isKatalogOnly()
+  const showBarangArt = isAdmin() && !katalogOnly
 
-  const filteredAdmin = isKatalogOnly() ? [] : adminItems.filter(item => {
+  // Renderer untuk link level atas (Dashboard, Katalog Emas)
+  const renderLink = (item) => {
+    const Icon = item.icon
+    const isActive = item.exact ? location.pathname === item.to : location.pathname.startsWith(item.to)
+    return (
+      <NavLink key={item.to} to={item.to} className={`sidebar-link ${isActive ? 'active' : ''}`} title={collapsed ? item.label : ''}>
+        <Icon className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-gold-400' : ''}`} />
+        {!collapsed && <span className="text-sm font-medium">{item.label}</span>}
+      </NavLink>
+    )
+  }
+
+  const filteredAdmin = katalogOnly ? [] : adminItems.filter(item => {
     if (item.role === 'ADMIN') return canManageUsers()
     if (item.role === 'SUPER_USER') return isSuperUser()
     return true
@@ -55,21 +124,16 @@ export default function Sidebar({ collapsed, onToggle }) {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {visibleNavItems.map(item => {
-          const Icon = item.icon
-          const isActive = item.exact ? location.pathname === item.to : location.pathname.startsWith(item.to)
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={`sidebar-link ${isActive ? 'active' : ''}`}
-              title={collapsed ? item.label : ''}
-            >
-              <Icon className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-gold-400' : ''}`} />
-              {!collapsed && <span className="text-sm font-medium">{item.label}</span>}
-            </NavLink>
-          )
-        })}
+        {katalogOnly ? (
+          renderLink(katalogItem)
+        ) : (
+          <>
+            {renderLink(dashboardItem)}
+            <NavGroup label="Elektronik" icon={Tv} items={elektronikItems} collapsed={collapsed} />
+            {renderLink(katalogItem)}
+            {showBarangArt && <NavGroup label="Barang ART" icon={Boxes} items={barangArtItems} collapsed={collapsed} />}
+          </>
+        )}
 
         {filteredAdmin.length > 0 && (
           <>

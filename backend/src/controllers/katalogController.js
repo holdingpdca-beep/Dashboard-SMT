@@ -1,5 +1,8 @@
 const prisma = require('../utils/prisma');
 const { simpanGambar, hapusGambar: hapusFileGambar } = require('../utils/storage');
+const { syncAll, fetchStoreProducts } = require('../services/serbamasSync');
+const { mapProduk, FIELD_CANDIDATES } = require('../services/serbamasMapping');
+const { createAuditLog } = require('../utils/audit');
 
 const getKatalog = async (req, res) => {
   try {
@@ -131,4 +134,67 @@ const hapusGambar = async (req, res) => {
   }
 };
 
-module.exports = { getKatalog, getKatalogById, createKatalog, updateKatalog, deleteKatalog, hapusGambar };
+// ── Sinkronisasi manual dengan API toko SERBAMAS ──
+const syncKatalog = async (req, res) => {
+  try {
+    const hasil = await syncAll();
+    const total = hasil.hasil.reduce(
+      (acc, r) => ({
+        created: acc.created + r.created,
+        updated: acc.updated + r.updated,
+        deleted: acc.deleted + r.deleted,
+      }),
+      { created: 0, updated: 0, deleted: 0 }
+    );
+
+    await createAuditLog({
+      userId: req.user?.id,
+      namaUser: req.user?.nama,
+      aktivitas: `Sinkronisasi katalog dengan API toko (+${total.created} baru, ${total.updated} update, -${total.deleted} hapus)`,
+      tabel: 'katalog_emas',
+      dataBaru: hasil,
+      ipAddress: req.ip,
+    });
+
+    res.json({
+      success: hasil.ok,
+      message: hasil.hasil.length === 0 && hasil.error.length === 0
+        ? 'Tidak ada cabang dengan Nama Toko yang di-set untuk disinkronkan.'
+        : `Sinkronisasi selesai: ${total.created} barang baru, ${total.updated} diperbarui, ${total.deleted} dihapus (stok habis).`,
+      total,
+      detail: hasil.hasil,
+      error: hasil.error,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message || 'Gagal menjalankan sinkronisasi' });
+  }
+};
+
+// ── Preview data mentah API (untuk verifikasi/penyesuaian pemetaan field) ──
+const previewSync = async (req, res) => {
+  try {
+    const cabangId = parseInt(req.query.cabangId);
+    if (!cabangId) return res.status(400).json({ success: false, message: 'Parameter cabangId wajib diisi' });
+    const cabang = await prisma.cabang.findUnique({ where: { id: cabangId } });
+    if (!cabang) return res.status(404).json({ success: false, message: 'Cabang tidak ditemukan' });
+
+    const rawList = await fetchStoreProducts(cabang);
+    const contoh = rawList.slice(0, 3);
+    res.json({
+      success: true,
+      cabang: cabang.nama,
+      storeName: cabang.storeName,
+      totalData: rawList.length,
+      fieldTersediaDiApi: contoh[0] ? Object.keys(contoh[0]) : [],
+      kandidatFieldDigunakan: FIELD_CANDIDATES,
+      contohMentah: contoh,
+      contohHasilPemetaan: contoh.map((r) => mapProduk(r, cabang)),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message || 'Gagal mengambil preview data API' });
+  }
+};
+
+module.exports = { getKatalog, getKatalogById, createKatalog, updateKatalog, deleteKatalog, hapusGambar, syncKatalog, previewSync };

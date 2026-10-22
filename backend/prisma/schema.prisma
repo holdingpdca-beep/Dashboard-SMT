@@ -8,17 +8,17 @@ datasource db {
 }
 
 model User {
-  id           Int           @id @default(autoincrement())
-  nama         String
-  email        String        @unique
-  password     String
-  role         Role          @default(USER)
-  isActive     Boolean       @default(true) @map("is_active")
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
-  auditLogs    AuditLog[]
-  invoices     Invoice[]
-  notifikasi   Notifikasi[]
+  id         Int          @id @default(autoincrement())
+  nama       String
+  email      String       @unique
+  password   String
+  role       Role         @default(USER)
+  isActive   Boolean      @default(true) @map("is_active")
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+  auditLogs  AuditLog[]
+  invoices   Invoice[]
+  notifikasi Notifikasi[]
 
   @@map("users")
 }
@@ -38,24 +38,24 @@ model Notifikasi {
 }
 
 model Elektronik {
-  id               Int          @id @default(autoincrement())
-  nomorSbg         String       @unique @map("nomor_sbg")
+  id               Int           @id @default(autoincrement())
+  nomorSbg         String        @unique @map("nomor_sbg")
   grade            Grade
-  jenisBarang      String       @map("jenis_barang")
-  detailBarang     String       @map("detail_barang")
-  keterangan       String?      @db.Text
-  cogs             Decimal      @db.Decimal(15, 2)
-  offeringPengepul Decimal?     @db.Decimal(15, 2) @map("offering_pengepul")
-  hargaJual        Decimal?     @db.Decimal(15, 2) @map("harga_jual")
-  ppn              Decimal?     @db.Decimal(15, 2)
-  totalHarga       Decimal?     @db.Decimal(15, 2) @map("total_harga")
-  profit           Decimal?     @db.Decimal(15, 2)
-  status           StatusBarang @default(BELUM_TERJUAL)
-  perusahaan       Perusahaan   @default(SERBA_MAS)
-  tanggalLelang    DateTime?    @map("tanggal_lelang")
-  tanggalMasuk     DateTime     @default(now()) @map("tanggal_masuk")
-  createdAt        DateTime     @default(now()) @map("created_at")
-  updatedAt        DateTime     @updatedAt @map("updated_at")
+  jenisBarang      String        @map("jenis_barang")
+  detailBarang     String        @map("detail_barang")
+  keterangan       String?       @db.Text
+  cogs             Decimal       @db.Decimal(15, 2)
+  offeringPengepul Decimal?      @map("offering_pengepul") @db.Decimal(15, 2)
+  hargaJual        Decimal?      @map("harga_jual") @db.Decimal(15, 2)
+  ppn              Decimal?      @db.Decimal(15, 2)
+  totalHarga       Decimal?      @map("total_harga") @db.Decimal(15, 2)
+  profit           Decimal?      @db.Decimal(15, 2)
+  status           StatusBarang  @default(BELUM_TERJUAL)
+  perusahaan       Perusahaan    @default(SERBA_MAS)
+  tanggalLelang    DateTime?     @map("tanggal_lelang")
+  tanggalMasuk     DateTime      @default(now()) @map("tanggal_masuk")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
   invoiceItems     InvoiceItem[]
 
   @@index([status])
@@ -79,7 +79,7 @@ model Invoice {
   approvedByNama String?       @map("approved_by_nama")
   approvedAt     DateTime?     @map("approved_at")
   rejectedAt     DateTime?     @map("rejected_at")
-  rejectedReason String?       @db.Text @map("rejected_reason")
+  rejectedReason String?       @map("rejected_reason") @db.Text
   printedAt      DateTime?     @map("printed_at")
   createdById    Int           @map("created_by_id")
   createdBy      User          @relation(fields: [createdById], references: [id])
@@ -101,9 +101,9 @@ model InvoiceItem {
   nomorSbg     String     @map("nomor_sbg")
   jenisBarang  String     @map("jenis_barang")
   detailBarang String     @map("detail_barang")
-  hargaJual    Decimal    @db.Decimal(15, 2) @map("harga_jual")
+  hargaJual    Decimal    @map("harga_jual") @db.Decimal(15, 2)
   ppn          Decimal    @db.Decimal(15, 2)
-  totalHarga   Decimal    @db.Decimal(15, 2) @map("total_harga")
+  totalHarga   Decimal    @map("total_harga") @db.Decimal(15, 2)
 
   @@map("invoice_items")
 }
@@ -160,6 +160,7 @@ model Cabang {
   id        Int           @id @default(autoincrement())
   nama      String
   alamat    String?       @db.Text
+  storeName String?       @map("store_name") // Nama toko di API SERBAMAS (StoreName), untuk sinkronisasi stok
   aktif     Boolean       @default(true)
   createdAt DateTime      @default(now()) @map("created_at")
   updatedAt DateTime      @updatedAt @map("updated_at")
@@ -169,24 +170,66 @@ model Cabang {
 }
 
 model KatalogEmas {
-  id          Int      @id @default(autoincrement())
-  cabangId    Int?     @map("cabang_id")
-  cabang      Cabang?  @relation(fields: [cabangId], references: [id])
-  kategori    KategoriEmas
-  jenisBarang String   @map("jenis_barang")
-  nama        String
-  deskripsi   String?  @db.Text
-  harga       Decimal  @db.Decimal(15, 2)
-  gambar      String?
-  tersedia    Boolean  @default(true)
-  urutan      Int      @default(0)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id           Int          @id @default(autoincrement())
+  cabangId     Int?         @map("cabang_id")
+  cabang       Cabang?      @relation(fields: [cabangId], references: [id])
+  kategori     KategoriEmas
+  jenisBarang  String       @map("jenis_barang")
+  nama         String
+  deskripsi    String?      @db.Text
+  harga        Decimal      @db.Decimal(15, 2)
+  gambar       String?      @db.Text
+  tersedia     Boolean      @default(true)
+  urutan       Int          @default(0)
+  // ── Sinkronisasi dengan API toko SERBAMAS ──
+  sumber       String       @default("MANUAL") // MANUAL = input tangan, API = hasil sinkron toko
+  externalId   String?      @map("external_id") // Kode/ID unik barang di sistem toko (untuk cocokkan & deteksi stok habis)
+  stok         Int? // Jumlah stok terakhir dari toko (jika tersedia di API)
+  lastSyncedAt DateTime?    @map("last_synced_at")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
 
+  @@unique([cabangId, externalId], name: "cabang_external")
+  @@index([sumber])
   @@map("katalog_emas")
 }
 
 enum KategoriEmas {
   PERHIASAN
   LM
+}
+
+// ── Barang ART (Logam Mulia & Perhiasan) ──
+// Satu tabel dipakai dua sub-fitur, dibedakan oleh `kategori`.
+model BarangArt {
+  id          Int          @id @default(autoincrement())
+  kategori    KategoriArt
+  barangAsal  String       @default("") @map("barang_asal") // asal barang, wajib diisi di aplikasi; default "" hanya untuk baris lama
+  nomorSbg    String       @map("nomor_sbg")
+  provinsi    String
+  namaBarang  String       @map("nama_barang")
+  gramasi     Decimal      @db.Decimal(12, 3)
+  karat       String
+  cogs        Decimal      @db.Decimal(15, 2)
+  kodeBarang  String       @map("kode_barang")
+  tanggalJual DateTime?    @map("tanggal_jual") // terisi hanya bila sudah terjual
+  nominalJual Decimal?     @map("nominal_jual") @db.Decimal(15, 2) // terisi hanya bila sudah terjual
+  vendor      String? // vendor pembeli, diisi saat tandai terjual
+  nomorSku    String?      @map("nomor_sku") // satu SKU bisa dipakai banyak barang dalam 1 penjualan
+  keterangan  String?      @db.Text
+  status      StatusBarang @default(BELUM_TERJUAL)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  // Catatan: satu No SBG (surat gadai) bisa memuat banyak barang → nomorSbg TIDAK unik.
+  @@index([kategori])
+  @@index([status])
+  @@index([nomorSku])
+  @@index([nomorSbg])
+  @@map("barang_art")
+}
+
+enum KategoriArt {
+  LOGAM_MULIA
+  PERHIASAN
 }

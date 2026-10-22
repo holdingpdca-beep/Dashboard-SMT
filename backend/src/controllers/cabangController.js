@@ -18,9 +18,9 @@ const getCabang = async (req, res) => {
 
 const createCabang = async (req, res) => {
   try {
-    const { nama, alamat } = req.body;
+    const { nama, alamat, storeName } = req.body;
     if (!nama) return res.status(400).json({ success: false, message: 'Nama cabang wajib diisi' });
-    const data = await prisma.cabang.create({ data: { nama, alamat: alamat || null } });
+    const data = await prisma.cabang.create({ data: { nama, alamat: alamat || null, storeName: storeName || null } });
     res.status(201).json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -30,7 +30,7 @@ const createCabang = async (req, res) => {
 const updateCabang = async (req, res) => {
   try {
     const id = parseInt(req.params.id);
-    const { nama, alamat, aktif } = req.body;
+    const { nama, alamat, aktif, storeName } = req.body;
     const existing = await prisma.cabang.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Cabang tidak ditemukan' });
     const data = await prisma.cabang.update({
@@ -38,6 +38,7 @@ const updateCabang = async (req, res) => {
       data: {
         ...(nama && { nama }),
         ...(alamat !== undefined && { alamat: alamat || null }),
+        ...(storeName !== undefined && { storeName: storeName || null }),
         ...(aktif !== undefined && { aktif: aktif === 'false' ? false : Boolean(aktif) }),
       },
     });
