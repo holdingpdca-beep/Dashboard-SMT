@@ -1,6 +1,0 @@
-OSS_REGION=ap-southeast-5
-OSS_BUCKET=smt-dashboard
-OSS_ACCESS_KEY_ID=YOUR_ACCESS_KEY_ID
-OSS_ACCESS_KEY_SECRET=YOUR_ACCESS_KEY_SECRET
-OSS_ENDPOINT=https://oss-ap-southeast-5.aliyuncs.com
-OSS_PUBLIC_BASE_URL=https://smt-dashboard.oss-ap-southeast-5.aliyuncs.com
