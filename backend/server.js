@@ -43,6 +43,18 @@ app.set('trust proxy', 1);
 // Mencegah injeksi objek filter Prisma via ?status[not]=x atau ?search[startsWith]=…
 app.set('query parser', 'simple');
 
+// L-06: parameter query yang diulang (mis. ?status=A&status=B) menghasilkan array.
+// Array yang masuk ke filter kesetaraan Prisma memicu validation error → 500 tidak rapi.
+// Ratakan ke nilai terakhir agar selalu berupa string tunggal.
+app.use((req, res, next) => {
+  if (req.query) {
+    for (const k of Object.keys(req.query)) {
+      if (Array.isArray(req.query[k])) req.query[k] = req.query[k][req.query[k].length - 1];
+    }
+  }
+  next();
+});
+
 // ── Security headers ──
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // izinkan gambar katalog di-load frontend
@@ -122,9 +134,20 @@ app.get('/api/health', (req, res) => {
 
 app.use((err, req, res, next) => {
   logger.error(err.stack || err.message || String(err));
-  // Jangan bocorkan detail error internal di production
-  const message = isProduction ? 'Terjadi kesalahan pada server' : (err.message || 'Internal Server Error');
-  res.status(err.status || 500).json({ success: false, message });
+
+  // L-06: error upload multer (ukuran/tipe file) & error 4xx yang disengaja → balas 400
+  // dengan pesan jelas, bukan 500 generik.
+  if (err && err.name === 'MulterError') {
+    err.status = 400;
+    if (err.code === 'LIMIT_FILE_SIZE') err.message = 'Ukuran file melebihi batas yang diizinkan';
+    else if (err.code === 'LIMIT_FILE_COUNT') err.message = 'Jumlah file melebihi batas yang diizinkan';
+  }
+
+  const status = err.status || 500;
+  const message = status < 500
+    ? (err.message || 'Permintaan tidak valid')                                   // error client → tampilkan pesan
+    : (isProduction ? 'Terjadi kesalahan pada server' : (err.message || 'Internal Server Error')); // error server → sembunyikan di production
+  res.status(status).json({ success: false, message });
 });
 
 const PORT = process.env.PORT || 5000;

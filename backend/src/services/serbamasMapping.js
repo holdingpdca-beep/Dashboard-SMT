@@ -53,6 +53,18 @@ function parseHarga(val) {
   return Number.isFinite(num) ? num : 0;
 }
 
+// Terima nilai gambar dari API HANYA bila berupa URL absolut https:// yang valid (L-05).
+// Menolak http:// (mixed content), path relatif/aneh, dan nilai traversal seperti
+// "/uploads/../.env" — sehingga nilai gambar yang tersimpan tidak pernah menunjuk ke
+// file lokal/OSS server ini (lihat juga M-01 di utils/storage.hapusGambar).
+function gambarValid(val) {
+  if (val === undefined || val === null) return null;
+  const s = String(val).trim();
+  if (!/^https:\/\//i.test(s)) return null;
+  try { new URL(s); } catch { return null; }
+  return s;
+}
+
 // Tentukan kategori enum dashboard (PERHIASAN | LM) dari teks kategori/jenis/nama.
 function tentukanKategori(...teksArr) {
   const teks = teksArr.filter(Boolean).join(' ').toLowerCase();
@@ -105,10 +117,10 @@ function mapProduk(raw, cabang) {
     kategori: tentukanKategori(kategoriTeks, jenisTeks, nama),
     jenisBarang: String(jenisTeks || kategoriTeks || 'Lainnya').trim(),
     harga: parseHarga(pick(raw, FIELD_CANDIDATES.harga)),
-    gambar: gambar ? String(gambar) : null,
+    gambar: gambarValid(gambar),
     stok: Number.isFinite(stokNum) ? stokNum : null,
     sumber: 'API',
   };
 }
 
-module.exports = { FIELD_CANDIDATES, pick, parseHarga, tentukanKategori, adaStok, mapProduk };
+module.exports = { FIELD_CANDIDATES, pick, parseHarga, tentukanKategori, adaStok, mapProduk, gambarValid };

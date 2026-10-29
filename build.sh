@@ -36,7 +36,22 @@ npm install --omit=dev
 
 echo "[2/5] Prisma generate + sinkron skema database ..."
 npx prisma generate
-npx prisma db push          # sinkronkan schema.prisma ke DB (tanpa file migration)
+# L-07: utamakan migrasi terkontrol di production. Jika sudah ada folder migrations,
+# pakai 'migrate deploy' (punya riwayat, bisa di-review). Bila belum ada, fallback ke
+# 'db push' tetapi INGATKAN untuk backup DB dulu — db push bisa mengubah skema tanpa riwayat.
+if [ -d "$BACKEND/prisma/migrations" ]; then
+  npx prisma migrate deploy
+else
+  echo "PERINGATAN: belum ada folder prisma/migrations. Memakai 'prisma db push'."
+  echo "            Disarankan BACKUP DATABASE dulu, lalu buat migrasi awal:"
+  echo "              mysqldump -u <user> -p dashboard_smt > backup-\$(date +%F).sql"
+  echo "              npx prisma migrate dev --name init   # (di mesin dev, sekali saja)"
+  read -r -p "Lanjutkan dengan 'prisma db push'? [y/N] " _ans
+  case "$_ans" in
+    [yY]|[yY][eE][sS]) npx prisma db push ;;
+    *) echo "Dibatalkan oleh operator."; exit 1 ;;
+  esac
+fi
 
 # Seed akun default HANYA jika tabel user masih kosong (idempoten via upsert).
 # Baris di bawah aman diulang; hapus '#' jika ingin otomatis seed saat deploy pertama.

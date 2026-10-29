@@ -71,19 +71,24 @@ Pastikan file backend/.env sudah diisi dengan benar:
 DATABASE_URL="mysql://USERNAME:PASSWORD@localhost:3306/dashboard_smt"
 
 Ganti USERNAME dan PASSWORD dengan data MySQL Anda.
-Contoh: mysql://root:admin123@localhost:3306/dashboard_smt
+Contoh: mysql://root:<password-mysql-anda>@localhost:3306/dashboard_smt
 
 Kemudian jalankan:
 → jalankan-backend.bat
 → jalankan-frontend.bat
 
 ================================================================
-AKUN LOGIN DEFAULT (Password: admin123)
+MEMBUAT AKUN LOGIN PERTAMA (ADMIN)
 ================================================================
 
-Role ADMIN     : admin@smt.com
-Role SUPER USER: superuser@smt.com
-Role USER      : user@smt.com
+Script SQL TIDAK membuat akun apa pun (tidak ada password default — H-02).
+Buat akun admin pertama lewat seed resmi dengan password dari environment:
+
+   cd backend
+   SEED_ADMIN_EMAIL=admin@smt.com SEED_ADMIN_PASSWORD=<password-kuat> npm run seed
+
+(password minimal 12 karakter, divalidasi aplikasi).
+Akun berikutnya dibuat oleh ADMIN lewat menu "Pengguna" di aplikasi.
 
 ================================================================
 TROUBLESHOOTING

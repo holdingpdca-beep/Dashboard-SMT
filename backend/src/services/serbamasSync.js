@@ -19,7 +19,9 @@ const { mapProduk, adaStok } = require('./serbamasMapping');
 
 const API_URL = process.env.SERBAMAS_API_URL
   || 'https://serbamas.cuan.co/web/sync-to-oracle/store-product-by-date/';
-const API_USER = process.env.SERBAMAS_API_USERNAME || 'SYNCRECONSERBAMAS';
+// L-08: username akun integrasi TIDAK lagi di-hardcode (separuh kredensial Basic Auth).
+// Wajib di-set lewat env SERBAMAS_API_USERNAME bila memakai mode 'basic'.
+const API_USER = process.env.SERBAMAS_API_USERNAME || '';
 const API_PASS = process.env.SERBAMAS_API_PASSWORD || '';
 // Token Bearer (API SERBAMAS memakai skema Bearer, bukan Basic Auth).
 const API_TOKEN = process.env.SERBAMAS_API_TOKEN || '';
@@ -45,12 +47,12 @@ function authHeader() {
 
 // Apakah kredensial untuk mode aktif sudah tersedia?
 function kredensialSiap() {
-  return AUTH_MODE === 'basic' ? !!API_PASS : !!API_TOKEN;
+  return AUTH_MODE === 'basic' ? (!!API_USER && !!API_PASS) : !!API_TOKEN;
 }
 
 function pesanKredensialKurang() {
   return AUTH_MODE === 'basic'
-    ? 'Password API SERBAMAS belum di-set (SERBAMAS_API_PASSWORD di .env)'
+    ? 'Kredensial API SERBAMAS belum lengkap (SERBAMAS_API_USERNAME & SERBAMAS_API_PASSWORD di .env)'
     : 'Token API SERBAMAS belum di-set. API ini memakai Bearer token — isi SERBAMAS_API_TOKEN di .env (minta token ke tim SERBAMAS/IT).';
 }
 
@@ -104,18 +106,27 @@ async function fetchStoreProducts(cabang, { dateFrom, dateTo } = {}) {
   }
 
   if (!res.ok) {
+    // L-01: detail body error API hanya ke log server; pesan ke client dibuat generik
+    // (body bisa memuat info internal API / token yang tidak boleh bocor ke pengguna).
     const body = await res.text().catch(() => '');
-    throw new Error(`API toko membalas ${res.status} ${res.statusText}${body ? ' — ' + body.slice(0, 200) : ''}`);
+    logger.error(`[SYNC] API toko "${cabang.nama}" membalas ${res.status} ${res.statusText}${body ? ' — ' + body.slice(0, 500) : ''}`);
+    throw new Error(`API toko membalas status ${res.status}`);
   }
 
   const json = await res.json();
   return extractList(json);
 }
 
+// Ambang aman: tolak penghapusan massal bila > 50% item API cabang akan terhapus
+// dalam satu sinkron (kecuali di-override ADMIN via opts.force). Lihat M-02.
+const BATAS_HAPUS_MASSAL = 0.5;
+
 /**
- * Sinkronkan satu cabang. Mengembalikan ringkasan { cabang, fetched, created, updated, deleted }.
+ * Sinkronkan satu cabang. Mengembalikan ringkasan
+ * { cabang, fetched, created, updated, deleted, deleteSkipped }.
+ * @param {object} opts.force - true untuk mengabaikan ambang aman mass-delete (khusus ADMIN).
  */
-async function syncCabang(cabang, { dateFrom, dateTo } = {}) {
+async function syncCabang(cabang, { dateFrom, dateTo, force = false } = {}) {
   const rawList = await fetchStoreProducts(cabang, { dateFrom, dateTo });
 
   const seenExternalIds = [];
@@ -171,47 +182,87 @@ async function syncCabang(cabang, { dateFrom, dateTo } = {}) {
   }
 
   // HAPUS PERMANEN item sinkron (sumber=API) di cabang ini yang tidak lagi ada di stok toko.
-  // Pengaman: fetch sudah sukses di atas (kalau gagal, fungsi ini sudah throw lebih dulu),
-  // jadi daftar kosong = memang benar-benar tidak ada stok.
-  const { count: deleted } = await prisma.katalogEmas.deleteMany({
-    where: {
-      cabangId: cabang.id,
-      sumber: 'API',
-      ...(seenExternalIds.length > 0 ? { externalId: { notIn: seenExternalIds } } : {}),
-    },
+  // Pengaman M-02: cegah penghapusan massal akibat respons API kosong / format berubah /
+  // storeName salah ketik / error dalam body 200 — yang semuanya membuat seenExternalIds kosong.
+  const whereHapus = {
+    cabangId: cabang.id,
+    sumber: 'API',
+    ...(seenExternalIds.length > 0 ? { externalId: { notIn: seenExternalIds } } : {}),
+  };
+  const existingApiCount = await prisma.katalogEmas.count({
+    where: { cabangId: cabang.id, sumber: 'API' },
   });
 
-  return { cabang: cabang.nama, fetched: rawList.length, created, updated, deleted };
+  let deleted = 0;
+  let deleteSkipped = null;
+
+  if (rawList.length === 0 && existingApiCount > 0) {
+    deleteSkipped = 'Respons API kosong — penghapusan dibatalkan (cegah hapus massal).';
+  } else if (seenExternalIds.length === 0 && existingApiCount > 0) {
+    deleteSkipped = 'Tidak ada data API yang ter-mapping (format/field API berubah?) — penghapusan dibatalkan.';
+  } else {
+    const akanHapus = await prisma.katalogEmas.count({ where: whereHapus });
+    if (!force && existingApiCount > 0 && akanHapus > Math.ceil(existingApiCount * BATAS_HAPUS_MASSAL)) {
+      deleteSkipped = `Penghapusan ${akanHapus}/${existingApiCount} item (> ${BATAS_HAPUS_MASSAL * 100}%) dibatalkan untuk keamanan. Jalankan sinkron paksa (ADMIN) bila memang benar.`;
+    } else {
+      const r = await prisma.katalogEmas.deleteMany({ where: whereHapus });
+      deleted = r.count;
+    }
+  }
+
+  if (deleteSkipped) {
+    logger.warn(`[SYNC] ${cabang.nama}: ${deleteSkipped}`);
+  }
+
+  return { cabang: cabang.nama, fetched: rawList.length, created, updated, deleted, deleteSkipped };
+}
+
+// L-01: satu lock bersama untuk sinkron manual (controller) & terjadwal (scheduler),
+// agar tidak ada dua proses sinkron berjalan bersamaan (cegah race pada create,
+// beban ganda ke API toko, dan audit/laporan ganda).
+let sedangSync = false;
+function isSyncRunning() {
+  return sedangSync;
 }
 
 /**
  * Sinkronkan semua cabang aktif yang sudah punya Nama Toko (storeName).
- * @returns {Promise<{ok:boolean, mulai:Date, selesai:Date, hasil:Array, error:Array}>}
+ * @returns {Promise<{ok:boolean, skipped?:boolean, mulai:Date, selesai:Date, hasil:Array, error:Array}>}
+ *          skipped=true bila sinkron lain sedang berjalan (tidak ada perubahan data).
  */
 async function syncAll(opts = {}) {
   const mulai = new Date();
-  const cabangList = await prisma.cabang.findMany({
-    where: { aktif: true, storeName: { not: null } },
-  });
+  if (sedangSync) {
+    logger.warn('[SYNC] Permintaan sinkron diabaikan: sinkronisasi lain sedang berjalan.');
+    return { ok: false, skipped: true, mulai, selesai: new Date(), hasil: [], error: [] };
+  }
+  sedangSync = true;
+  try {
+    const cabangList = await prisma.cabang.findMany({
+      where: { aktif: true, storeName: { not: null } },
+    });
 
-  const hasil = [];
-  const error = [];
-  for (const cabang of cabangList) {
-    try {
-      const ringkasan = await syncCabang(cabang, opts);
-      hasil.push(ringkasan);
-      logger.info(`[SYNC] ${cabang.nama}: +${ringkasan.created} baru, ${ringkasan.updated} update, -${ringkasan.deleted} hapus (dari ${ringkasan.fetched} data toko)`);
-    } catch (err) {
-      error.push({ cabang: cabang.nama, pesan: err.message });
-      logger.error(`[SYNC] Gagal sinkron cabang "${cabang.nama}": ${err.message}`);
+    const hasil = [];
+    const error = [];
+    for (const cabang of cabangList) {
+      try {
+        const ringkasan = await syncCabang(cabang, opts);
+        hasil.push(ringkasan);
+        logger.info(`[SYNC] ${cabang.nama}: +${ringkasan.created} baru, ${ringkasan.updated} update, -${ringkasan.deleted} hapus (dari ${ringkasan.fetched} data toko)`);
+      } catch (err) {
+        error.push({ cabang: cabang.nama, pesan: err.message });
+        logger.error(`[SYNC] Gagal sinkron cabang "${cabang.nama}": ${err.message}`);
+      }
     }
-  }
 
-  const selesai = new Date();
-  if (cabangList.length === 0) {
-    logger.warn('[SYNC] Tidak ada cabang aktif dengan Nama Toko (storeName) yang di-set. Sinkronisasi dilewati.');
+    const selesai = new Date();
+    if (cabangList.length === 0) {
+      logger.warn('[SYNC] Tidak ada cabang aktif dengan Nama Toko (storeName) yang di-set. Sinkronisasi dilewati.');
+    }
+    return { ok: error.length === 0, mulai, selesai, hasil, error };
+  } finally {
+    sedangSync = false;
   }
-  return { ok: error.length === 0, mulai, selesai, hasil, error };
 }
 
-module.exports = { fetchStoreProducts, syncCabang, syncAll, extractList };
+module.exports = { fetchStoreProducts, syncCabang, syncAll, extractList, isSyncRunning };

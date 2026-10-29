@@ -3,6 +3,7 @@ const { simpanGambar, hapusGambar: hapusFileGambar } = require('../utils/storage
 const { syncAll, fetchStoreProducts } = require('../services/serbamasSync');
 const { mapProduk, FIELD_CANDIDATES } = require('../services/serbamasMapping');
 const { createAuditLog } = require('../utils/audit');
+const logger = require('../utils/logger');
 
 const getKatalog = async (req, res) => {
   try {
@@ -26,7 +27,7 @@ const getKatalog = async (req, res) => {
     });
     res.json({ success: true, data: items });
   } catch (err) {
-    console.error(err);
+    logger.error(err.stack || err.message || String(err));
     res.status(500).json({ success: false, message: 'Gagal memuat katalog' });
   }
 };
@@ -80,7 +81,7 @@ const createKatalog = async (req, res) => {
 
     res.status(201).json({ success: true, data: item });
   } catch (err) {
-    console.error(err);
+    logger.error(err.stack || err.message || String(err));
     res.status(500).json({ success: false, message: 'Gagal membuat item katalog' });
   }
 };
@@ -102,7 +103,9 @@ const updateKatalog = async (req, res) => {
       } catch (imgErr) {
         return res.status(400).json({ success: false, message: imgErr.message });
       }
-      if (existing.gambar) await hapusFileGambar(existing.gambar);
+      // M-01: hanya hapus file lama bila gambar milik server ini (item MANUAL).
+      // Gambar item hasil sinkron (API) adalah URL eksternal milik toko, bukan file kita.
+      if (existing.gambar && existing.sumber === 'MANUAL') await hapusFileGambar(existing.gambar);
       gambar = gambarBaru;
     }
 
@@ -133,7 +136,7 @@ const updateKatalog = async (req, res) => {
 
     res.json({ success: true, data: item });
   } catch (err) {
-    console.error(err);
+    logger.error(err.stack || err.message || String(err));
     res.status(500).json({ success: false, message: 'Gagal memperbarui item katalog' });
   }
 };
@@ -144,7 +147,8 @@ const deleteKatalog = async (req, res) => {
     const existing = await prisma.katalogEmas.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Item tidak ditemukan' });
 
-    if (existing.gambar) await hapusFileGambar(existing.gambar);
+    // M-01: hanya hapus file bila gambar milik server ini (item MANUAL).
+    if (existing.gambar && existing.sumber === 'MANUAL') await hapusFileGambar(existing.gambar);
     await prisma.katalogEmas.delete({ where: { id } });
 
     await createAuditLog({
@@ -167,7 +171,8 @@ const hapusGambar = async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = await prisma.katalogEmas.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Item tidak ditemukan' });
-    if (existing.gambar) await hapusFileGambar(existing.gambar);
+    // M-01: hanya hapus file bila gambar milik server ini (item MANUAL).
+    if (existing.gambar && existing.sumber === 'MANUAL') await hapusFileGambar(existing.gambar);
     await prisma.katalogEmas.update({ where: { id }, data: { gambar: null } });
     res.json({ success: true, message: 'Gambar berhasil dihapus' });
   } catch (err) {
@@ -178,7 +183,15 @@ const hapusGambar = async (req, res) => {
 // ── Sinkronisasi manual dengan API toko SERBAMAS ──
 const syncKatalog = async (req, res) => {
   try {
-    const hasil = await syncAll();
+    // L-01: sinkron paksa (abaikan ambang mass-delete M-02) hanya untuk ADMIN via ?force=1
+    const force = req.user?.role === 'ADMIN' && (req.query.force === '1' || req.query.force === 'true');
+    const hasil = await syncAll({ force });
+
+    // Sinkron lain sedang berjalan → jangan jalankan paralel (409)
+    if (hasil.skipped) {
+      return res.status(409).json({ success: false, message: 'Sinkronisasi sedang berjalan. Coba lagi beberapa saat.' });
+    }
+
     const total = hasil.hasil.reduce(
       (acc, r) => ({
         created: acc.created + r.created,
@@ -207,7 +220,7 @@ const syncKatalog = async (req, res) => {
       error: hasil.error,
     });
   } catch (err) {
-    console.error(err);
+    logger.error(err.stack || err.message || String(err));
     res.status(500).json({ success: false, message: 'Gagal menjalankan sinkronisasi' });
   }
 };
@@ -233,7 +246,7 @@ const previewSync = async (req, res) => {
       contohHasilPemetaan: contoh.map((r) => mapProduk(r, cabang)),
     });
   } catch (err) {
-    console.error(err);
+    logger.error(err.stack || err.message || String(err));
     res.status(500).json({ success: false, message: 'Gagal mengambil preview data API' });
   }
 };

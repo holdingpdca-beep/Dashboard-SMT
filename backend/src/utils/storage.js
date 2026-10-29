@@ -117,18 +117,27 @@ async function simpanGambar(file, folder = 'katalog') {
  * @param {string} gambar - nilai kolom gambar dari DB
  */
 async function hapusGambar(gambar) {
-  if (!gambar) return;
+  if (!gambar || typeof gambar !== 'string') return;
 
   try {
-    // Gambar OSS: URL penuh diawali base publik OSS
-    if (ossPublicBase && gambar.startsWith(ossPublicBase)) {
+    // Gambar OSS: URL penuh diawali base publik OSS.
+    // M-01: hanya izinkan key di dalam folder yang kita kelola (katalog/)
+    // dan tanpa komponen traversal ("..") — cegah penghapusan objek arbitrer.
+    if (ossPublicBase && gambar.startsWith(ossPublicBase + '/')) {
       const key = gambar.slice(ossPublicBase.length + 1); // buang "base/"
-      if (ossClient && key) await ossClient.delete(key);
+      if (ossClient && key && !key.includes('..') && /^katalog\//.test(key)) {
+        await ossClient.delete(key);
+      }
       return;
     }
     // Gambar lokal: path relatif /uploads/...
+    // M-01: resolve path lalu pastikan TETAP di dalam folder uploads/.
+    // path.join menormalisasi "..", sehingga "/uploads/../.env" bisa menunjuk
+    // ke file di luar uploads. Guard di bawah menolak path seperti itu.
     if (gambar.startsWith('/uploads/')) {
-      const localPath = path.join(LOCAL_ROOT, gambar);
+      const uploadsRoot = path.join(LOCAL_ROOT, 'uploads') + path.sep;
+      const localPath = path.resolve(LOCAL_ROOT, '.' + gambar);
+      if (!localPath.startsWith(uploadsRoot)) return; // tolak traversal keluar uploads
       if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
     }
   } catch (err) {
