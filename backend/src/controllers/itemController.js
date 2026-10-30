@@ -595,7 +595,8 @@ const getRiwayat = async (req, res, next) => {
           invoiceItems: {
             include: {
               invoice: {
-                select: { nomorInvoice: true, namaCustomer: true, noTelepon: true, approvedAt: true, approvedByNama: true, tanggalInvoice: true },
+                // createdById dipakai untuk menentukan kepemilikan (L-09); tidak ikut dikirim ke client non-admin.
+                select: { nomorInvoice: true, namaCustomer: true, noTelepon: true, approvedAt: true, approvedByNama: true, tanggalInvoice: true, createdById: true },
               },
             },
           },
@@ -605,14 +606,21 @@ const getRiwayat = async (req, res, next) => {
 
     const bolehLihatSemua = canSeeAll(req.user);
 
-    // Sembunyikan COGS, profit, dan nomor telepon customer dari role non-admin (H-02 / UU PDP)
+    // Sembunyikan COGS, profit, nomor telepon, dan nama customer dari role non-admin
+    // (H-02 / UU PDP / L-09). namaCustomer hanya ditampilkan untuk invoice milik user
+    // itu sendiri; createdById tidak pernah ikut terkirim ke client.
     const dataAman = bolehLihatSemua ? items : items.map((item) => {
       const { cogs, profit, offeringPengepul, ...rest } = item;
       if (Array.isArray(rest.invoiceItems)) {
-        rest.invoiceItems = rest.invoiceItems.map((ii) => ({
-          ...ii,
-          invoice: ii.invoice ? { ...ii.invoice, noTelepon: null } : ii.invoice,
-        }));
+        rest.invoiceItems = rest.invoiceItems.map((ii) => {
+          if (!ii.invoice) return ii;
+          const { createdById, ...invRest } = ii.invoice;
+          const milikSendiri = createdById === req.user.id;
+          return {
+            ...ii,
+            invoice: { ...invRest, noTelepon: null, namaCustomer: milikSendiri ? invRest.namaCustomer : null },
+          };
+        });
       }
       return rest;
     });

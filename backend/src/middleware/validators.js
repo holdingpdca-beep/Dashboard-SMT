@@ -65,8 +65,13 @@ const updateInvoiceRules = [
 ];
 
 const updateInvoiceItemsRules = [
-  body('itemIds').isArray({ min: 1 }).withMessage('Minimal 1 barang harus dipilih'),
+  body('itemIds').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 barang harus dipilih (maks 500)'),
   body('itemIds.*').isInt().withMessage('ID barang tidak valid'),
+];
+
+// Alasan reject/cancel invoice — opsional tapi dibatasi panjangnya (L-06)
+const rejectInvoiceRules = [
+  body('alasan').optional({ nullable: true }).isLength({ max: 500 }).withMessage('Alasan maksimal 500 karakter'),
 ];
 
 // ── User ──
@@ -123,6 +128,44 @@ const updateCabangRules = [
   body('aktif').optional().isBoolean().withMessage('aktif harus true atau false'),
 ];
 
+// ── Barang ART (L-02) ──
+const KATEGORI_ART = ['LOGAM_MULIA', 'PERHIASAN'];
+
+const createBarangArtRules = [
+  body('kategori').isIn(KATEGORI_ART).withMessage('Kategori harus LOGAM_MULIA atau PERHIASAN'),
+  body('barangAsal').trim().notEmpty().withMessage('Barang asal wajib diisi').bail().isLength({ max: 150 }).withMessage('Barang asal maksimal 150 karakter'),
+  body('nomorSbg').trim().notEmpty().withMessage('Nomor SBG wajib diisi').bail().isLength({ max: 100 }).withMessage('Nomor SBG maksimal 100 karakter'),
+  body('provinsi').trim().notEmpty().withMessage('Provinsi wajib diisi').bail().isLength({ max: 100 }).withMessage('Provinsi maksimal 100 karakter'),
+  body('namaBarang').trim().notEmpty().withMessage('Nama barang wajib diisi').bail().isLength({ max: 200 }).withMessage('Nama barang maksimal 200 karakter'),
+  body('gramasi').exists().withMessage('Gramasi wajib diisi').bail().isFloat({ min: 0 }).withMessage('Gramasi harus angka >= 0'),
+  body('karat').trim().notEmpty().withMessage('Karat wajib diisi').bail().isLength({ max: 50 }).withMessage('Karat maksimal 50 karakter'),
+  body('cogs').exists().withMessage('COGS wajib diisi').bail().isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
+  body('kodeBarang').trim().notEmpty().withMessage('Kode barang wajib diisi').bail().isLength({ max: 100 }).withMessage('Kode barang maksimal 100 karakter'),
+  body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
+];
+
+const updateBarangArtRules = [
+  body('barangAsal').optional().trim().notEmpty().withMessage('Barang asal tidak boleh kosong').bail().isLength({ max: 150 }).withMessage('Barang asal maksimal 150 karakter'),
+  body('nomorSbg').optional().trim().notEmpty().withMessage('Nomor SBG tidak boleh kosong').bail().isLength({ max: 100 }).withMessage('Nomor SBG maksimal 100 karakter'),
+  body('provinsi').optional().trim().notEmpty().withMessage('Provinsi tidak boleh kosong').bail().isLength({ max: 100 }).withMessage('Provinsi maksimal 100 karakter'),
+  body('namaBarang').optional().trim().notEmpty().withMessage('Nama barang tidak boleh kosong').bail().isLength({ max: 200 }).withMessage('Nama barang maksimal 200 karakter'),
+  body('gramasi').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Gramasi harus angka >= 0'),
+  body('karat').optional().trim().notEmpty().withMessage('Karat tidak boleh kosong').bail().isLength({ max: 50 }).withMessage('Karat maksimal 50 karakter'),
+  body('cogs').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
+  body('kodeBarang').optional().trim().isLength({ max: 100 }).withMessage('Kode barang maksimal 100 karakter'),
+  body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
+];
+
+const markSoldRules = [
+  body('tanggalJual').notEmpty().withMessage('Tanggal jual wajib diisi'),
+  body('vendor').trim().notEmpty().withMessage('Vendor wajib diisi').bail().isLength({ max: 150 }).withMessage('Vendor maksimal 150 karakter'),
+  body('nomorSku').trim().notEmpty().withMessage('Nomor SKU wajib diisi').bail().isLength({ max: 100 }).withMessage('Nomor SKU maksimal 100 karakter'),
+  body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
+  body('items').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 barang harus dipilih (maks 500)'),
+  body('items.*.id').isInt().withMessage('ID barang tidak valid'),
+  body('items.*.nominalJual').isFloat({ min: 0 }).withMessage('Nominal jual harus angka >= 0'),
+];
+
 module.exports = {
   loginRules,
   changePasswordRules,
@@ -131,6 +174,7 @@ module.exports = {
   createInvoiceRules,
   updateInvoiceRules,
   updateInvoiceItemsRules,
+  rejectInvoiceRules,
   createUserRules,
   updateUserRules,
   resetPasswordRules,
@@ -138,4 +182,7 @@ module.exports = {
   updateKatalogRules,
   createCabangRules,
   updateCabangRules,
+  createBarangArtRules,
+  updateBarangArtRules,
+  markSoldRules,
 };

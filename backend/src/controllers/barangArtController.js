@@ -40,10 +40,13 @@ function normalizeKategori(raw) {
   return KATEGORI_VALID.includes(k) ? k : null;
 }
 
+const STATUS_VALID = ['BELUM_TERJUAL', 'TERJUAL'];
+
 const buildWhere = (kategori, query) => {
   const { search, status, tanpaKode } = query;
   const where = { kategori };
-  if (status) where.status = status;
+  // L-02: hanya terima nilai enum status yang valid (nilai asing → diabaikan, cegah 500)
+  if (status && STATUS_VALID.includes(status)) where.status = status;
   // Barang yang Kode Barang-nya belum diisi (mis. hasil import)
   if (tanpaKode === '1' || tanpaKode === 'true' || tanpaKode === true) where.kodeBarang = '';
   if (search) {
@@ -214,6 +217,13 @@ const markSold = async (req, res, next) => {
     const existingItems = await prisma.barangArt.findMany({ where: { id: { in: ids } } });
     if (existingItems.length !== ids.length) {
       return res.status(404).json({ success: false, message: 'Sebagian barang tidak ditemukan' });
+    }
+
+    // L-02: cegah "jual ulang" barang yang sudah TERJUAL (data penjualan lama akan tertimpa).
+    const sudahTerjual = existingItems.filter(i => i.status !== 'BELUM_TERJUAL');
+    if (sudahTerjual.length > 0) {
+      const daftar = sudahTerjual.map(i => i.nomorSbg).join(', ');
+      return res.status(400).json({ success: false, message: `Barang berikut sudah terjual: ${daftar}. Batalkan status terjual dulu bila ingin mengubah.` });
     }
 
     // Barang tanpa Kode Barang tidak boleh dijual — Kode Barang wajib diisi dulu.

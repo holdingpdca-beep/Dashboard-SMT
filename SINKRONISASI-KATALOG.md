@@ -20,11 +20,20 @@ npx prisma generate         # perbarui Prisma Client (field baru)
 npx prisma db push          # tambah kolom baru ke database (aman, tidak hapus data)
 ```
 
-Lalu isi **password API** di file `backend/.env`:
+Lalu isi **kredensial API** di file `backend/.env` (minta ke tim SERBAMAS/IT):
 
 ```
-SERBAMAS_API_PASSWORD=<password_dari_SYNCRECONSERBAMAS>
+# Mode default (bearer):
+SERBAMAS_API_TOKEN=<token_dari_tim_SERBAMAS>
+
+# Atau mode basic:
+# SERBAMAS_AUTH_MODE=basic
+# SERBAMAS_API_USERNAME=<username_integrasi>
+# SERBAMAS_API_PASSWORD=<password_integrasi>
 ```
+
+> Kredensial & username akun integrasi hanya disimpan di `.env`, tidak di-hardcode
+> dalam kode atau dokumentasi (L-08).
 
 Jalankan ulang backend:
 

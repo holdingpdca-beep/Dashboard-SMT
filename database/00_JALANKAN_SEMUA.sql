@@ -158,13 +158,17 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================
 -- LANGKAH 8: Isi data awal
--- Password: admin123
 -- ============================================
-INSERT INTO `users` (`nama`, `email`, `password`, `role`, `is_active`) VALUES
-  ('Administrator', 'admin@smt.com',      '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'ADMIN',      1),
-  ('Super User',    'superuser@smt.com',  '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'SUPER_USER', 1),
-  ('User Biasa',    'user@smt.com',       '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'USER',       1)
-ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP;
+-- CATATAN KEAMANAN (H-02): akun pengguna TIDAK dibuat lewat script SQL ini.
+-- Membuat akun via SQL akan melewati kebijakan password aplikasi dan dulu
+-- menanamkan password default yang dikenal publik.
+--
+-- Buat akun admin pertama lewat seed resmi dengan password dari environment:
+--
+--   cd backend
+--   SEED_ADMIN_EMAIL=admin@smt.com SEED_ADMIN_PASSWORD=<password-kuat> npm run seed
+--
+-- (password minimal 12 karakter, divalidasi oleh aplikasi).
 
 INSERT INTO `elektronik`
   (`nomor_sbg`,`grade`,`jenis_barang`,`detail_barang`,`keterangan`,`cogs`,`offering_pengepul`,`harga_jual`,`ppn`,`total_harga`,`profit`,`status`,`perusahaan`) VALUES
@@ -220,7 +224,7 @@ SELECT 'invoices',                             COUNT(*)        FROM invoices   U
 SELECT 'invoice_items',                        COUNT(*)        FROM invoice_items UNION ALL
 SELECT 'audit_logs',                           COUNT(*)        FROM audit_logs;
 
-SELECT '=== AKUN DEFAULT ===' AS info;
+SELECT '=== DAFTAR AKUN (buat lewat: npm run seed) ===' AS info;
 SELECT email, role FROM users ORDER BY id;
 
 SELECT '=== STATISTIK AWAL ===' AS info;

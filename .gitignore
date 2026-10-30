@@ -22,9 +22,11 @@ backend/uploads/*
 uploads/
 !uploads/.gitkeep
 
-# Data bisnis / hasil export — JANGAN commit (M-08)
+# Data bisnis / hasil export — JANGAN commit (M-08 / M-04)
 *.xlsx
 *.xls
+# Pengecualian: template import kosong boleh ikut repo (bukan data bisnis)
+!Format Excel.xlsx
 
 # Logs
 logs/

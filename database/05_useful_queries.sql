@@ -192,7 +192,8 @@ FROM information_schema.TABLES
 WHERE TABLE_SCHEMA = 'dashboard_smt'
 ORDER BY DATA_LENGTH DESC;
 
--- E4. Reset akun (ubah password semua user ke 'admin123' untuk testing)
--- HATI-HATI: Hanya dijalankan di environment development!
--- UPDATE users SET password = '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy'
--- WHERE email IN ('admin@smt.com', 'superuser@smt.com', 'user@smt.com');
+-- E4. Reset password akun
+-- CATATAN KEAMANAN (H-02): JANGAN set password lewat SQL (melewati kebijakan password
+-- aplikasi & berisiko menanam hash yang dikenal publik). Reset password dilakukan oleh
+-- ADMIN lewat aplikasi (menu Pengguna → Reset Password), atau untuk admin pertama
+-- lewat seed:  SEED_ADMIN_PASSWORD=<password-kuat> npm run seed

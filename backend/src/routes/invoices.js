@@ -3,7 +3,7 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const { requireRole, ELEKTRONIK_ROLES } = require('../middleware/roleCheck');
 const { handleValidation } = require('../middleware/validate');
-const { createInvoiceRules, updateInvoiceRules, updateInvoiceItemsRules } = require('../middleware/validators');
+const { createInvoiceRules, updateInvoiceRules, updateInvoiceItemsRules, rejectInvoiceRules } = require('../middleware/validators');
 const { getInvoices, getInvoiceById, createInvoice, updateInvoice, updateInvoiceItems, submitApproval, approveInvoice, rejectInvoice, printInvoice, deleteInvoice, cancelInvoice } = require('../controllers/invoiceController');
 
 // Seluruh modul invoice hanya untuk role elektronik (ADMIN/SUPER_USER/USER).
@@ -18,8 +18,8 @@ router.put('/:id/items', updateInvoiceItemsRules, handleValidation, updateInvoic
 router.delete('/:id', deleteInvoice);
 router.post('/:id/submit', submitApproval);
 router.post('/:id/approve', requireRole('ADMIN'), approveInvoice);
-router.post('/:id/reject', requireRole('ADMIN'), rejectInvoice);
-router.post('/:id/cancel', requireRole('ADMIN'), cancelInvoice);
+router.post('/:id/reject', requireRole('ADMIN'), rejectInvoiceRules, handleValidation, rejectInvoice);
+router.post('/:id/cancel', requireRole('ADMIN'), rejectInvoiceRules, handleValidation, cancelInvoice);
 router.put('/:id/print', printInvoice);
 
 module.exports = router;

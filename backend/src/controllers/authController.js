@@ -4,9 +4,10 @@ const prisma = require('../utils/prisma');
 const { createAuditLog } = require('../utils/audit');
 const { validatePassword, BCRYPT_COST } = require('../utils/password');
 
-// Hash dummy untuk menyamakan waktu respons ketika email tidak ada (L-08).
-// Mencegah user enumeration via timing — bcrypt.compare tetap dijalankan.
-const DUMMY_HASH = bcrypt.hashSync('dummy-password-untuk-timing-safety', 10);
+// Hash dummy untuk menyamakan waktu respons ketika email tidak ada (L-03).
+// Cost HARUS sama dengan BCRYPT_COST agar waktu bcrypt.compare untuk email tak terdaftar
+// setara dengan email terdaftar — mencegah user enumeration via timing.
+const DUMMY_HASH = bcrypt.hashSync('dummy-password-untuk-timing-safety', BCRYPT_COST);
 
 const login = async (req, res, next) => {
   try {
@@ -30,6 +31,16 @@ const login = async (req, res, next) => {
       });
       return res.status(401).json({ success: false, message: 'Email atau password salah' });
     }
+
+    // L-03: rehash password lama yang masih memakai cost di bawah BCRYPT_COST,
+    // agar waktu verifikasi login seragam (dan keamanan hash meningkat). Tidak
+    // mengubah tokenVersion → sesi aktif tetap berlaku.
+    try {
+      if (bcrypt.getRounds(user.password) < BCRYPT_COST) {
+        const rehashed = await bcrypt.hash(password, BCRYPT_COST);
+        await prisma.user.update({ where: { id: user.id }, data: { password: rehashed } });
+      }
+    } catch (_) { /* abaikan kegagalan rehash — tidak boleh menggagalkan login */ }
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, tokenVersion: user.tokenVersion },
