@@ -1,25 +1,26 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { requireRole, ELEKTRONIK_ROLES } = require('../middleware/roleCheck');
-const { handleValidation } = require('../middleware/validate');
-const { createInvoiceRules, updateInvoiceRules, updateInvoiceItemsRules, rejectInvoiceRules } = require('../middleware/validators');
-const { getInvoices, getInvoiceById, createInvoice, updateInvoice, updateInvoiceItems, submitApproval, approveInvoice, rejectInvoice, printInvoice, deleteInvoice, cancelInvoice } = require('../controllers/invoiceController');
 
-// Seluruh modul invoice hanya untuk role elektronik (ADMIN/SUPER_USER/USER).
-// KATALOG_USER dikecualikan di sini (H-01).
-router.use(auth, requireRole(...ELEKTRONIK_ROLES));
+// L-01: Alur Invoice lama (buat → approval → cetak) sudah TIDAK DIGUNAKAN, digantikan
+// penjualan langsung + struk (lihat routes/items.js). Seluruh endpoint /api/invoices/*
+// dinonaktifkan untuk mengurangi permukaan serangan dan mencegah bentrok dengan
+// penjualan langsung (barang di invoice DRAFT/WAITING bisa ikut terjual langsung).
+//
+// Data historis invoice TETAP tersimpan di database (tabel invoices / invoice_items)
+// dan bisa diakses langsung bila sewaktu-waktu diperlukan. Controller lama
+// (controllers/invoiceController.js) sengaja dibiarkan di repo sebagai arsip.
+//
+// Bila alur invoice ingin diaktifkan kembali, kembalikan registrasi route lama
+// dan terapkan update bersyarat status (lihat catatan L-01 pada audit v4).
 
-router.get('/', getInvoices);
-router.get('/:id', getInvoiceById);
-router.post('/', createInvoiceRules, handleValidation, createInvoice);
-router.put('/:id', updateInvoiceRules, handleValidation, updateInvoice);
-router.put('/:id/items', updateInvoiceItemsRules, handleValidation, updateInvoiceItems);
-router.delete('/:id', deleteInvoice);
-router.post('/:id/submit', submitApproval);
-router.post('/:id/approve', requireRole('ADMIN'), approveInvoice);
-router.post('/:id/reject', requireRole('ADMIN'), rejectInvoiceRules, handleValidation, rejectInvoice);
-router.post('/:id/cancel', requireRole('ADMIN'), rejectInvoiceRules, handleValidation, cancelInvoice);
-router.put('/:id/print', printInvoice);
+router.use(auth);
+
+router.all(/.*/, (req, res) => {
+  res.status(410).json({
+    success: false,
+    message: 'Fitur Invoice sudah tidak digunakan (digantikan penjualan langsung & struk).',
+  });
+});
 
 module.exports = router;

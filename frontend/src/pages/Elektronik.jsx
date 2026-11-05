@@ -125,6 +125,16 @@ export default function Elektronik() {
     if (!jualForm.namaSales.trim()) return toast.error('Nama sales wajib diisi')
     const payloadItems = chosenItems.map(i => ({ id: i.id, hargaJual: parseFloat(jualPrices[i.id]?.net) || 0 }))
     if (payloadItems.some(it => !it.hargaJual || it.hargaJual <= 0)) return toast.error('Harga setiap barang wajib diisi')
+    // H-02: non-admin tidak boleh menjual di bawah HJ MIN (pra-cek; backend tetap menolak juga)
+    if (!canSeeCogs()) {
+      const dibawah = chosenItems.filter(i => {
+        const net = parseFloat(jualPrices[i.id]?.net) || 0
+        return i.hjMin != null && net < parseFloat(i.hjMin)
+      })
+      if (dibawah.length) {
+        return toast.error(`Harga di bawah HJ MIN: ${dibawah.map(i => i.nomorSbg).join(', ')}. Hanya ADMIN yang dapat menjual di bawah HJ MIN.`)
+      }
+    }
     setJualLoading(true)
     try {
       const { data } = await api.post('/items/jual', { ...jualForm, items: payloadItems })

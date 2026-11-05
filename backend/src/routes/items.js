@@ -5,7 +5,7 @@ const auth = require('../middleware/auth');
 const { requireRole, ELEKTRONIK_ROLES } = require('../middleware/roleCheck');
 const { handleValidation } = require('../middleware/validate');
 const { createItemRules, updateItemRules, jualItemsRules } = require('../middleware/validators');
-const { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, exportRiwayat } = require('../controllers/itemController');
+const { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, voidStruk, exportRiwayat } = require('../controllers/itemController');
 
 // Whitelist tipe file Excel untuk import
 const EXCEL_MIME = [
@@ -27,9 +27,12 @@ router.use(auth, requireRole(...ELEKTRONIK_ROLES));
 
 router.get('/stats', getStats);
 router.get('/export', exportExcel);
-router.get('/riwayat/export', exportRiwayat);
+// M-03: export riwayat (berisi data pribadi pelanggan) hanya untuk ADMIN/SUPER_USER
+router.get('/riwayat/export', requireRole('ADMIN', 'SUPER_USER'), exportRiwayat);
 router.get('/riwayat', getRiwayat);
 router.post('/jual', jualItemsRules, handleValidation, jualItems);
+// H-02: pembatalan (void) penjualan hanya untuk ADMIN
+router.post('/struk/:nomorStruk/void', requireRole('ADMIN'), voidStruk);
 router.get('/', getItems);
 router.get('/:id', getItemById);
 router.post('/', requireRole('ADMIN', 'SUPER_USER'), createItemRules, handleValidation, createItem);

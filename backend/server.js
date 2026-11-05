@@ -71,8 +71,11 @@ app.use(cors({
 app.use(morgan(isProduction ? 'combined' : 'dev', { stream: logger.stream }));
 
 // ── Body parser (limit diturunkan dari 50mb ke 10mb) ──
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// L-04: batas body JSON diturunkan ke 1 MB (payload terbesar = penjualan maks 500 item,
+// jauh di bawah 1 MB). Import Excel memakai multipart/form-data (multer, batas 10 MB),
+// tidak terpengaruh batas ini.
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // ── Rate limiting global ──
 const apiLimiter = rateLimit({
@@ -151,8 +154,12 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-  logger.info(`Server berjalan di port ${PORT}`);
+// M-01: default bind HANYA ke 127.0.0.1 agar API tidak terjangkau langsung dari
+// internet (hanya lewat reverse proxy Apache/Nginx di server yang sama). Bila backend
+// perlu diakses dari host lain, set HOST=0.0.0.0 di .env (dan lindungi dengan firewall).
+const HOST = process.env.HOST || '127.0.0.1';
+const server = app.listen(PORT, HOST, () => {
+  logger.info(`Server berjalan di ${HOST}:${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
   // Nyalakan penjadwal sinkronisasi katalog otomatis (jika diaktifkan di .env)
   try {
