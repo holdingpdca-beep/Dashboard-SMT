@@ -6,7 +6,6 @@ import Navbar from './Navbar'
 const PAGE_TITLES = {
   '/': 'Dashboard',
   '/elektronik': 'Data Elektronik',
-  '/invoice': 'Invoice',
   '/riwayat': 'Riwayat Penjualan',
   '/katalog': 'Katalog Emas',
   '/users': 'Manajemen User',

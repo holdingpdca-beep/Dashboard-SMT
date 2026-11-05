@@ -51,6 +51,72 @@ function parseTanggal(raw) {
   return null;
 }
 
+// ── Perhitungan harga berbasis COGS (format Elektronik 2026) ──
+// COGS adalah satu-satunya input harga. Harga jual diturunkan otomatis:
+//   HJ MIN    = COGS + 17%, dibulatkan KE ATAS ke ribuan terdekat
+//   HJ MAX    = COGS + 24%, dibulatkan KE ATAS ke ribuan terdekat
+//   HARGA SMT = HJ MAX dibulatkan KE ATAS ke puluhan ribu (4 angka terakhir jadi 0)
+// Field lama (hargaJual/ppn/totalHarga/profit) tetap diisi demi kompatibilitas
+// Invoice & Dashboard: harga jual invoice memakai HARGA SMT, PPN 1,1%.
+function hitungHarga(cogsRaw) {
+  const cogs = parseFloat(cogsRaw) || 0;
+  const hjMin = Math.ceil((cogs * 1.17) / 1000) * 1000;
+  const hjMax = Math.ceil((cogs * 1.24) / 1000) * 1000;
+  const hargaSmt = Math.ceil(hjMax / 10000) * 10000;
+  const hargaJual = hargaSmt;
+  const ppn = parseFloat((hargaSmt * 0.011).toFixed(2));
+  const totalHarga = parseFloat((hargaSmt + ppn).toFixed(2));
+  const profit = parseFloat((hargaSmt - cogs).toFixed(2));
+  return { hjMin, hjMax, hargaSmt, hargaJual, ppn, totalHarga, profit };
+}
+
+// Parser angka tahan-format: terima number asli, atau string ber-"Rp", spasi,
+// dan pemisah ribuan (1.500.000 / 1,500,000). Return null bila kosong/invalid.
+function angka(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return isNaN(v) ? null : v;
+  let s = String(v).trim().replace(/[^\d.,-]/g, ''); // buang Rp, spasi, dll
+  if (s === '' || s === '-') return null;
+  if (s.includes(',') && s.includes('.')) {
+    // Ada keduanya → titik = ribuan, koma = desimal (format Indonesia)
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (s.includes(',')) {
+    // >1 koma → ribuan gaya US (2,224,200); 1 koma → desimal
+    if ((s.match(/,/g) || []).length > 1) s = s.replace(/,/g, '');
+    else s = s.replace(',', '.');
+  } else {
+    // Hanya titik: >1 titik pasti ribuan (1.500.000); 1 titik dibiarkan (bisa desimal 4376200.6)
+    if ((s.match(/\./g) || []).length > 1) s = s.replace(/\./g, '');
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// Harga efektif: pakai override (dari import Excel) bila ada, selain itu hitung dari COGS.
+// overrides = { hjMin, hjMax, hargaSmt } (masing-masing boleh null).
+function hargaEfektif(cogsRaw, overrides = {}) {
+  const c = hitungHarga(cogsRaw);
+  const cogs = parseFloat(cogsRaw) || 0;
+  const num = (v) => (v === null || v === undefined || v === '' || isNaN(parseFloat(v))) ? null : parseFloat(v);
+  const hjMin = num(overrides.hjMin) != null ? num(overrides.hjMin) : c.hjMin;
+  const hjMax = num(overrides.hjMax) != null ? num(overrides.hjMax) : c.hjMax;
+  const hargaSmt = num(overrides.hargaSmt) != null ? num(overrides.hargaSmt) : c.hargaSmt;
+  const hargaJual = hargaSmt;
+  const ppn = parseFloat((hargaSmt * 0.011).toFixed(2));
+  const totalHarga = parseFloat((hargaSmt + ppn).toFixed(2));
+  const profit = parseFloat((hargaSmt - cogs).toFixed(2));
+  return { hjMin, hjMax, hargaSmt, hargaJual, ppn, totalHarga, profit };
+}
+
+// Lampirkan field turunan (hjMin/hjMax/hargaSmt) ke objek item untuk respons API.
+// Dipanggil SEBELUM COGS di-strip agar role non-admin tetap melihat harga jual
+// (HJ MIN/MAX/HARGA SMT) walau COGS disembunyikan. Menghormati override tersimpan.
+function withHarga(item) {
+  if (!item) return item;
+  const { hjMin, hjMax, hargaSmt } = hargaEfektif(item.cogs, { hjMin: item.hjMin, hjMax: item.hjMax, hargaSmt: item.hargaSmt });
+  return { ...item, hjMin, hjMax, hargaSmt };
+}
+
 const buildWhere = (query, userRole) => {
   const { search, grade, status, startDate, endDate, jenisBarang, perusahaan } = query;
   const where = {};
@@ -87,6 +153,9 @@ const getItems = async (req, res, next) => {
     const sortOrder = sortOrderOf(req.query.sortOrder);
     const skip = (page - 1) * limit;
     const where = buildWhere(req.query, req.user.role);
+    // Tabel Data Elektronik = stok tersedia. Default hanya BELUM_TERJUAL;
+    // barang terjual pindah ke Riwayat Penjualan (kecuali diminta status lain).
+    if (!req.query.status) where.status = 'BELUM_TERJUAL';
 
     const [total, items] = await Promise.all([
       prisma.elektronik.count({ where }),
@@ -99,7 +168,11 @@ const getItems = async (req, res, next) => {
     ]);
 
     const hideCogs = !canSeeAll(req.user);
-    const data = hideCogs ? items.map(i => { const { cogs, profit, ...rest } = i; return rest; }) : items;
+    const data = items.map(i => {
+      const withH = withHarga(i);
+      if (hideCogs) { const { cogs, profit, ...rest } = withH; return rest; }
+      return withH;
+    });
 
     res.json({
       success: true,
@@ -116,11 +189,12 @@ const getItemById = async (req, res, next) => {
     const item = await prisma.elektronik.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
 
+    const withH = withHarga(item);
     if (!canSeeAll(req.user)) {
-      const { cogs, profit, ...rest } = item;
+      const { cogs, profit, ...rest } = withH;
       return res.json({ success: true, data: rest });
     }
-    res.json({ success: true, data: item });
+    res.json({ success: true, data: withH });
   } catch (err) {
     next(err);
   }
@@ -128,7 +202,7 @@ const getItemById = async (req, res, next) => {
 
 const createItem = async (req, res, next) => {
   try {
-    const { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, offeringPengepul, hargaJual, perusahaan, tanggalLelang } = req.body;
+    const { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, perusahaan, tanggalLelang } = req.body;
 
     if (!nomorSbg || !grade || !jenisBarang || !detailBarang || cogs === undefined) {
       return res.status(400).json({ success: false, message: 'Field wajib tidak lengkap' });
@@ -138,10 +212,8 @@ const createItem = async (req, res, next) => {
     if (existing) return res.status(400).json({ success: false, message: 'Nomor SBG sudah ada' });
 
     const cogsNum = parseFloat(cogs);
-    const hargaJualNum = hargaJual ? parseFloat(hargaJual) : null;
-    const ppn = hargaJualNum ? parseFloat((hargaJualNum * 0.011).toFixed(2)) : null;
-    const totalHarga = hargaJualNum && ppn ? parseFloat((hargaJualNum + ppn).toFixed(2)) : null;
-    const profit = hargaJualNum ? parseFloat((hargaJualNum - cogsNum).toFixed(2)) : null;
+    // Harga jual (HJ MIN/MAX/HARGA SMT) & field lama diturunkan otomatis dari COGS
+    const { hargaJual, ppn, totalHarga, profit } = hitungHarga(cogsNum);
 
     const item = await prisma.elektronik.create({
       data: {
@@ -151,8 +223,8 @@ const createItem = async (req, res, next) => {
         detailBarang,
         keterangan: keterangan || null,
         cogs: cogsNum,
-        offeringPengepul: offeringPengepul ? parseFloat(offeringPengepul) : null,
-        hargaJual: hargaJualNum,
+        offeringPengepul: null,
+        hargaJual,
         ppn,
         totalHarga,
         profit,
@@ -170,7 +242,7 @@ const createItem = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
-    res.status(201).json({ success: true, message: 'Data berhasil ditambahkan', data: item });
+    res.status(201).json({ success: true, message: 'Data berhasil ditambahkan', data: withHarga(item) });
   } catch (err) {
     next(err);
   }
@@ -183,10 +255,10 @@ const updateItem = async (req, res, next) => {
     if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
 
     // status TIDAK diterima dari body — hanya bisa berubah lewat flow invoice (approve/cancel)
-    const { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, offeringPengepul, hargaJual, perusahaan, tanggalLelang } = req.body;
+    const { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, perusahaan, tanggalLelang } = req.body;
 
     // Barang yang sudah TERJUAL tidak boleh diubah harganya (jaga konsistensi dengan snapshot invoice)
-    if (existing.status === 'TERJUAL' && (cogs !== undefined || hargaJual !== undefined)) {
+    if (existing.status === 'TERJUAL' && cogs !== undefined) {
       return res.status(400).json({ success: false, message: 'Tidak dapat mengubah harga barang yang sudah terjual' });
     }
 
@@ -196,10 +268,8 @@ const updateItem = async (req, res, next) => {
     }
 
     const cogsNum = cogs !== undefined ? parseFloat(cogs) : parseFloat(existing.cogs);
-    const hargaJualNum = hargaJual !== undefined ? (hargaJual ? parseFloat(hargaJual) : null) : (existing.hargaJual ? parseFloat(existing.hargaJual) : null);
-    const ppn = hargaJualNum ? parseFloat((hargaJualNum * 0.011).toFixed(2)) : null;
-    const totalHarga = hargaJualNum && ppn ? parseFloat((hargaJualNum + ppn).toFixed(2)) : null;
-    const profit = hargaJualNum ? parseFloat((hargaJualNum - cogsNum).toFixed(2)) : null;
+    // Semua harga jual & field lama dihitung ulang dari COGS
+    const { hargaJual, ppn, totalHarga, profit } = hitungHarga(cogsNum);
 
     const updated = await prisma.elektronik.update({
       where: { id },
@@ -210,8 +280,12 @@ const updateItem = async (req, res, next) => {
         detailBarang: detailBarang || existing.detailBarang,
         keterangan: keterangan !== undefined ? keterangan : existing.keterangan,
         cogs: cogsNum,
-        offeringPengepul: offeringPengepul !== undefined ? (offeringPengepul ? parseFloat(offeringPengepul) : null) : existing.offeringPengepul,
-        hargaJual: hargaJualNum,
+        // Edit manual → reset override HJ, harga kembali mengikuti rumus COGS
+        hjMin: null,
+        hjMax: null,
+        hargaSmt: null,
+        offeringPengepul: null,
+        hargaJual,
         ppn,
         totalHarga,
         profit,
@@ -230,7 +304,7 @@ const updateItem = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
-    res.json({ success: true, message: 'Data berhasil diperbarui', data: updated });
+    res.json({ success: true, message: 'Data berhasil diperbarui', data: withHarga(updated) });
   } catch (err) {
     next(err);
   }
@@ -285,7 +359,16 @@ const importExcel = async (req, res, next) => {
 
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet);
+    // Baca sebagai array-of-arrays lalu bangun objek dengan KUNCI = teks header baris pertama,
+    // persis seperti dropdown di frontend (rows[0].map(String)). Ini menghindari ketidakcocokan
+    // object-mode (kolom kembar jadi "COGS_1", header kosong jadi "__EMPTY") yg bikin nilai → 0.
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+    const headers = (aoa[0] || []).map(h => String(h));
+    const rows = aoa.slice(1).map(arr => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = arr[i]; });
+      return obj;
+    });
 
     // Batasi jumlah baris agar import besar tidak membebani DB / request hang (L-02)
     if (rows.length > MAX_IMPORT_ROWS) {
@@ -304,11 +387,13 @@ const importExcel = async (req, res, next) => {
         const jenisBarang = String(row[mappingObj.jenisBarang] || '').trim();
         const detailBarang = String(row[mappingObj.detailBarang] || '').trim();
         const grade = String(row[mappingObj.grade] || '').trim().toUpperCase();
-        const cogs = parseFloat(row[mappingObj.cogs] || 0);
-        const offeringPengepul = mappingObj.offeringPengepul ? parseFloat(row[mappingObj.offeringPengepul] || 0) : null;
-        const hargaJual = mappingObj.hargaJual ? parseFloat(row[mappingObj.hargaJual] || 0) : null;
+        const cogs = angka(row[mappingObj.cogs]) || 0;
         const keterangan = mappingObj.keterangan ? String(row[mappingObj.keterangan] || '') : null;
         const tanggalLelang = mappingObj.tanggalLelang ? parseTanggal(row[mappingObj.tanggalLelang]) : null;
+        // Override HJ MIN/MAX/HARGA SMT bila dipetakan di Excel (selain itu dihitung dari COGS)
+        const ovHjMin = mappingObj.hjMin ? angka(row[mappingObj.hjMin]) : null;
+        const ovHjMax = mappingObj.hjMax ? angka(row[mappingObj.hjMax]) : null;
+        const ovHargaSmt = mappingObj.hargaSmt ? angka(row[mappingObj.hargaSmt]) : null;
 
         if (!nomorSbg || !jenisBarang || !detailBarang || !['A','B','C','D'].includes(grade)) {
           gagal++;
@@ -316,9 +401,8 @@ const importExcel = async (req, res, next) => {
           continue;
         }
 
-        const ppn = hargaJual ? parseFloat((hargaJual * 0.011).toFixed(2)) : null;
-        const totalHarga = hargaJual && ppn ? parseFloat((hargaJual + ppn).toFixed(2)) : null;
-        const profit = hargaJual ? parseFloat((hargaJual - cogs).toFixed(2)) : null;
+        // Harga jual & field lama: pakai override Excel bila ada, selain itu hitung dari COGS
+        const { hargaJual, ppn, totalHarga, profit } = hargaEfektif(cogs, { hjMin: ovHjMin, hjMax: ovHjMax, hargaSmt: ovHargaSmt });
 
         const existing = await prisma.elektronik.findUnique({ where: { nomorSbg } });
         if (existing) {
@@ -330,12 +414,12 @@ const importExcel = async (req, res, next) => {
           }
           await prisma.elektronik.update({
             where: { nomorSbg },
-            data: { grade, jenisBarang, detailBarang, keterangan, cogs, offeringPengepul, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', ...(tanggalLelang ? { tanggalLelang } : {}) },
+            data: { grade, jenisBarang, detailBarang, keterangan, cogs, hjMin: ovHjMin, hjMax: ovHjMax, hargaSmt: ovHargaSmt, offeringPengepul: null, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', ...(tanggalLelang ? { tanggalLelang } : {}) },
           });
           duplicate++;
         } else {
           await prisma.elektronik.create({
-            data: { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, offeringPengepul, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', tanggalLelang },
+            data: { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, hjMin: ovHjMin, hjMax: ovHjMax, hargaSmt: ovHargaSmt, offeringPengepul: null, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', tanggalLelang },
           });
           berhasil++;
         }
@@ -372,27 +456,24 @@ const exportExcel = async (req, res, next) => {
     const hideCogs = !canSeeAll(req.user);
 
     const data = items.map((item, idx) => {
+      const { hjMin, hjMax, hargaSmt } = hargaEfektif(item.cogs, { hjMin: item.hjMin, hjMax: item.hjMax, hargaSmt: item.hargaSmt });
       const row = {
         No: idx + 1,
-        'Tanggal Lelang': item.tanggalLelang ? new Date(item.tanggalLelang).toLocaleDateString('id-ID') : '',
+        'Tanggal Serah Terima': item.tanggalLelang ? new Date(item.tanggalLelang).toLocaleDateString('id-ID') : '',
         'Nomor SBG': item.nomorSbg,
-        Grade: item.grade,
         'Jenis Barang': item.jenisBarang,
-        'Detail Barang': item.detailBarang,
+        Grade: item.grade,
+        'Nama Barang': item.detailBarang,
         Keterangan: item.keterangan || '',
-        'Offering Pengepul': item.offeringPengepul != null ? parseFloat(item.offeringPengepul) : '',
-        'Harga Jual': item.hargaJual != null ? parseFloat(item.hargaJual) : '',
-        'PPN (1.1%)': item.ppn != null ? parseFloat(item.ppn) : '',
-        'Total Harga': item.totalHarga != null ? parseFloat(item.totalHarga) : '',
-        Status: item.status === 'BELUM_TERJUAL' ? 'Belum Terjual' : 'Terjual',
-        Perusahaan: item.perusahaan === 'VOLARY' ? 'Volary' : 'Serba Mas',
-        'Tanggal Masuk': new Date(item.tanggalMasuk).toLocaleDateString('id-ID'),
       };
-      // COGS & Profit hanya untuk role yang berwenang (H-02)
-      if (!hideCogs) {
-        row['COGS'] = parseFloat(item.cogs);
-        row['Profit'] = item.profit != null ? parseFloat(item.profit) : '';
-      }
+      // COGS hanya untuk role yang berwenang (H-02)
+      if (!hideCogs) row['COGS'] = parseFloat(item.cogs);
+      row['HJ MIN'] = hjMin;
+      row['HJ MAX'] = hjMax;
+      row['HARGA SMT'] = hargaSmt;
+      row['Status'] = item.status === 'BELUM_TERJUAL' ? 'Belum Terjual' : 'Terjual';
+      row['Perusahaan'] = item.perusahaan === 'VOLARY' ? 'Volary' : 'Serba Mas';
+      row['Tanggal Masuk'] = new Date(item.tanggalMasuk).toLocaleDateString('id-ID');
       return row;
     });
 
@@ -413,6 +494,130 @@ const exportExcel = async (req, res, next) => {
     res.setHeader('Content-Disposition', `attachment; filename="Data-Elektronik-${Date.now()}.xlsx"`);
     res.send(buf);
   } catch (err) {
+    next(err);
+  }
+};
+
+// Nomor struk sekuensial: STR-YYYY-NNNN (mis. STR-2026-0001), diambil dari
+// nomor terbesar tahun berjalan + 1. Tabrakan ditangani retry di jualItems.
+async function generateNomorStruk() {
+  const year = new Date().getFullYear();
+  const prefix = `STR-${year}-`;
+  const last = await prisma.elektronik.findFirst({
+    where: { nomorStruk: { startsWith: prefix } },
+    orderBy: { nomorStruk: 'desc' },
+    select: { nomorStruk: true },
+  });
+  let seq = 1;
+  if (last && last.nomorStruk) {
+    const n = parseInt(last.nomorStruk.slice(prefix.length), 10);
+    if (!isNaN(n)) seq = n + 1;
+  }
+  return `${prefix}${String(seq).padStart(4, '0')}`;
+}
+
+const JENIS_PEMBELI = ['KARYAWAN_INTERNAL', 'EKSTERNAL', 'PENGEPUL'];
+
+// Penjualan langsung + struk: tandai barang TERJUAL dan simpan data penjualan
+// (harga terjual manual, PPN 1,1%, pelanggan, sales, jenis pembeli) di baris elektronik.
+const jualItems = async (req, res, next) => {
+  try {
+    const { namaPelanggan, noTelepon, tanggal, namaSales, jenisPembeli, items } = req.body;
+
+    if (!namaPelanggan || !namaSales || !tanggal) {
+      return res.status(400).json({ success: false, message: 'Nama pelanggan, nama sales, dan tanggal wajib diisi' });
+    }
+    if (!JENIS_PEMBELI.includes(jenisPembeli)) {
+      return res.status(400).json({ success: false, message: 'Jenis pembeli tidak valid' });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'Tidak ada barang dipilih' });
+    }
+
+    // Petakan id → harga jual (net, sebelum PPN) yang diinput manual
+    const hargaById = new Map();
+    for (const it of items) {
+      const id = Number(it.id);
+      const harga = parseFloat(it.hargaJual);
+      if (!Number.isInteger(id) || isNaN(harga) || harga <= 0) {
+        return res.status(400).json({ success: false, message: 'Harga jual setiap barang wajib diisi dan lebih dari 0' });
+      }
+      hargaById.set(id, harga);
+    }
+    const idList = [...hargaById.keys()];
+
+    const tanggalJual = parseTanggal(tanggal);
+    if (!tanggalJual) return res.status(400).json({ success: false, message: 'Tanggal tidak valid' });
+
+    // Validasi: semua barang ada & masih BELUM_TERJUAL
+    const barang = await prisma.elektronik.findMany({ where: { id: { in: idList } } });
+    if (barang.length !== idList.length) {
+      return res.status(400).json({ success: false, message: 'Sebagian barang tidak ditemukan' });
+    }
+    const sudah = barang.filter(b => b.status === 'TERJUAL');
+    if (sudah.length > 0) {
+      return res.status(400).json({ success: false, message: `Barang sudah terjual: ${sudah.map(b => b.nomorSbg).join(', ')}` });
+    }
+
+    // Buat nomor struk + simpan penjualan dalam satu transaksi atomik (+ retry nomor tabrakan)
+    let nomorStruk = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      nomorStruk = await generateNomorStruk();
+      try {
+        await prisma.$transaction(async (tx) => {
+          for (const b of barang) {
+            const net = hargaById.get(b.id);
+            const ppn = parseFloat((net * 0.011).toFixed(2));
+            const totalHarga = parseFloat((net + ppn).toFixed(2));
+            const profit = parseFloat((net - parseFloat(b.cogs)).toFixed(2));
+            // updateMany dgn guard status agar tak bisa terjual ganda (race)
+            const r = await tx.elektronik.updateMany({
+              where: { id: b.id, status: 'BELUM_TERJUAL' },
+              data: {
+                status: 'TERJUAL',
+                hargaJual: net, ppn, totalHarga, profit,
+                offeringPengepul: null,
+                tanggalJual, namaPelanggan, noTelepon: noTelepon || null,
+                namaSales, jenisPembeli, nomorStruk,
+              },
+            });
+            if (r.count !== 1) {
+              throw Object.assign(new Error(`Barang ${b.nomorSbg} sudah terjual di transaksi lain`), { status: 409 });
+            }
+          }
+        });
+        break;
+      } catch (e) {
+        if (e.code === 'P2002' && attempt < 4) continue; // nomor struk tabrakan → coba lagi
+        throw e;
+      }
+    }
+
+    const terjual = await prisma.elektronik.findMany({ where: { nomorStruk }, orderBy: { id: 'asc' } });
+
+    await createAuditLog({
+      userId: req.user.id,
+      namaUser: req.user.nama,
+      aktivitas: `JUAL ${terjual.length} BARANG — Struk ${nomorStruk} (${namaPelanggan})`,
+      tabel: 'Elektronik',
+      dataBaru: { nomorStruk, namaPelanggan, jenisPembeli, jumlah: terjual.length },
+      ipAddress: req.ip,
+    });
+
+    // Data struk untuk dicetak di frontend (COGS tidak ikut ke struk pelanggan)
+    const strukItems = terjual.map(b => ({
+      nomorSbg: b.nomorSbg, jenisBarang: b.jenisBarang, grade: b.grade,
+      detailBarang: b.detailBarang, keterangan: b.keterangan,
+      hargaJual: parseFloat(b.hargaJual), ppn: parseFloat(b.ppn), totalHarga: parseFloat(b.totalHarga),
+    }));
+
+    res.status(201).json({
+      success: true,
+      message: `Penjualan berhasil — Struk ${nomorStruk}`,
+      data: { nomorStruk, namaPelanggan, noTelepon: noTelepon || null, namaSales, jenisPembeli, tanggalJual, items: strukItems },
+    });
+  } catch (err) {
+    if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
     next(err);
   }
 };
@@ -561,22 +766,21 @@ const getStats = async (req, res, next) => {
 
 const getRiwayat = async (req, res, next) => {
   try {
-    const { perusahaan, search } = req.query;
+    const { search, jenisPembeli } = req.query;
     const page = toInt(req.query.page, 1, 1, 1e9);
     const limit = toInt(req.query.limit, 50, 1, 100);
     const skip = (page - 1) * limit;
 
     const where = { status: 'TERJUAL' };
-    if (perusahaan) where.perusahaan = perusahaan;
+    if (jenisPembeli && JENIS_PEMBELI.includes(jenisPembeli)) where.jenisPembeli = jenisPembeli;
     if (search) {
       where.OR = [
         { jenisBarang: { contains: search } },
         { detailBarang: { contains: search } },
         { nomorSbg: { contains: search } },
-        { invoiceItems: { some: { invoice: { OR: [
-          { namaCustomer: { contains: search } },
-          { nomorInvoice: { contains: search } },
-        ] } } } },
+        { namaPelanggan: { contains: search } },
+        { nomorStruk: { contains: search } },
+        { namaSales: { contains: search } },
       ];
     }
 
@@ -584,46 +788,23 @@ const getRiwayat = async (req, res, next) => {
       prisma.elektronik.count({ where }),
       prisma.elektronik.aggregate({
         where,
-        _sum: { profit: true, totalHarga: true, hargaJual: true },
+        _sum: { profit: true, totalHarga: true, hargaJual: true, ppn: true },
       }),
       prisma.elektronik.findMany({
         where,
         skip,
         take: limit,
-        orderBy: { updatedAt: 'desc' },
-        include: {
-          invoiceItems: {
-            include: {
-              invoice: {
-                // createdById dipakai untuk menentukan kepemilikan (L-09); tidak ikut dikirim ke client non-admin.
-                select: { nomorInvoice: true, namaCustomer: true, noTelepon: true, approvedAt: true, approvedByNama: true, tanggalInvoice: true, createdById: true },
-              },
-            },
-          },
-        },
+        // Penjualan terbaru dulu; tanggalJual bisa null utk data lama → fallback updatedAt
+        orderBy: [{ tanggalJual: 'desc' }, { updatedAt: 'desc' }],
       }),
     ]);
 
     const bolehLihatSemua = canSeeAll(req.user);
 
-    // Sembunyikan COGS, profit, nomor telepon, dan nama customer dari role non-admin
-    // (H-02 / UU PDP / L-09). namaCustomer hanya ditampilkan untuk invoice milik user
-    // itu sendiri; createdById tidak pernah ikut terkirim ke client.
-    const dataAman = bolehLihatSemua ? items : items.map((item) => {
-      const { cogs, profit, offeringPengepul, ...rest } = item;
-      if (Array.isArray(rest.invoiceItems)) {
-        rest.invoiceItems = rest.invoiceItems.map((ii) => {
-          if (!ii.invoice) return ii;
-          const { createdById, ...invRest } = ii.invoice;
-          const milikSendiri = createdById === req.user.id;
-          return {
-            ...ii,
-            invoice: { ...invRest, noTelepon: null, namaCustomer: milikSendiri ? invRest.namaCustomer : null },
-          };
-        });
-      }
-      return rest;
-    });
+    // Sembunyikan COGS & profit dari role non-admin (H-02).
+    const dataAman = bolehLihatSemua
+      ? items
+      : items.map((item) => { const { cogs, profit, ...rest } = item; return rest; });
 
     res.json({
       success: true,
@@ -632,6 +813,7 @@ const getRiwayat = async (req, res, next) => {
         totalBarang: total,
         totalProfit: bolehLihatSemua ? parseFloat(agregat._sum.profit || 0) : null,
         totalHargaJual: parseFloat(agregat._sum.hargaJual || 0),
+        totalPpn: parseFloat(agregat._sum.ppn || 0),
         totalNilai: parseFloat(agregat._sum.totalHarga || 0),
       },
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
@@ -641,4 +823,80 @@ const getRiwayat = async (req, res, next) => {
   }
 };
 
-module.exports = { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat };
+const JENIS_PEMBELI_LABEL = {
+  KARYAWAN_INTERNAL: 'Karyawan Internal',
+  EKSTERNAL: 'Eksternal',
+  PENGEPUL: 'Pengepul',
+};
+
+// Export Riwayat Penjualan ke Excel. Mengikuti filter jenis pembeli
+// (semua / karyawan internal / eksternal / pengepul) + pencarian.
+const exportRiwayat = async (req, res, next) => {
+  try {
+    const { search, jenisPembeli } = req.query;
+    const where = { status: 'TERJUAL' };
+    if (jenisPembeli && JENIS_PEMBELI.includes(jenisPembeli)) where.jenisPembeli = jenisPembeli;
+    if (search) {
+      where.OR = [
+        { jenisBarang: { contains: search } },
+        { detailBarang: { contains: search } },
+        { nomorSbg: { contains: search } },
+        { namaPelanggan: { contains: search } },
+        { nomorStruk: { contains: search } },
+        { namaSales: { contains: search } },
+      ];
+    }
+
+    const items = await prisma.elektronik.findMany({
+      where,
+      orderBy: [{ tanggalJual: 'desc' }, { updatedAt: 'desc' }],
+    });
+
+    const hideCogs = !canSeeAll(req.user);
+    const data = items.map((item, idx) => {
+      const row = {
+        No: idx + 1,
+        'Tanggal Jual': new Date(item.tanggalJual || item.updatedAt).toLocaleDateString('id-ID'),
+        'Tanggal Serah Terima': item.tanggalLelang ? new Date(item.tanggalLelang).toLocaleDateString('id-ID') : '',
+        'No. Struk': item.nomorStruk || '',
+        'Nomor SBG': item.nomorSbg,
+        'Jenis Barang': item.jenisBarang,
+        Grade: item.grade,
+        'Nama Barang': item.detailBarang,
+        Keterangan: item.keterangan || '',
+      };
+      if (!hideCogs) row['COGS'] = parseFloat(item.cogs);
+      row['Harga Terjual'] = item.hargaJual != null ? parseFloat(item.hargaJual) : '';
+      row['PPN (1.1%)'] = item.ppn != null ? parseFloat(item.ppn) : '';
+      row['Total Harga'] = item.totalHarga != null ? parseFloat(item.totalHarga) : '';
+      if (!hideCogs) row['Profit'] = item.profit != null ? parseFloat(item.profit) : '';
+      row['Pembeli'] = item.jenisPembeli ? (JENIS_PEMBELI_LABEL[item.jenisPembeli] || item.jenisPembeli) : '';
+      row['Pelanggan'] = item.namaPelanggan || '';
+      row['No. Telepon'] = item.noTelepon || '';
+      row['Sales'] = item.namaSales || '';
+      return row;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    const sheetName = jenisPembeli ? (JENIS_PEMBELI_LABEL[jenisPembeli] || 'Riwayat') : 'Semua';
+    XLSX.utils.book_append_sheet(wb, ws, `Riwayat ${sheetName}`.slice(0, 31));
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    await createAuditLog({
+      userId: req.user.id,
+      namaUser: req.user.nama,
+      aktivitas: `EXPORT RIWAYAT PENJUALAN (${items.length} data${jenisPembeli ? ', ' + sheetName : ''})`,
+      tabel: 'Elektronik',
+      ipAddress: req.ip,
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="Riwayat-Penjualan-${Date.now()}.xlsx"`);
+    res.send(buf);
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, exportRiwayat };

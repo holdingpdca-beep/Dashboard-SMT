@@ -46,6 +46,24 @@ export const PERUSAHAAN_LABELS = {
   SERBA_MAS: 'Serba Mas',
 }
 
+export const JENIS_PEMBELI_LABELS = {
+  KARYAWAN_INTERNAL: 'Karyawan Internal',
+  EKSTERNAL: 'Eksternal',
+  PENGEPUL: 'Pengepul',
+}
+
+export const JENIS_PEMBELI_OPTIONS = [
+  { value: 'KARYAWAN_INTERNAL', label: 'Karyawan Internal' },
+  { value: 'EKSTERNAL', label: 'Eksternal' },
+  { value: 'PENGEPUL', label: 'Pengepul' },
+]
+
+export const JENIS_PEMBELI_COLORS = {
+  KARYAWAN_INTERNAL: 'badge-info',
+  EKSTERNAL: 'badge-gold',
+  PENGEPUL: 'badge-warning',
+}
+
 export const GRADE_COLORS = {
   A: 'badge-success',
   B: 'badge-info',

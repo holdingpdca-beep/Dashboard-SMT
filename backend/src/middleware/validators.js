@@ -30,8 +30,6 @@ const createItemRules = [
   body('jenisBarang').trim().notEmpty().withMessage('Jenis barang wajib diisi'),
   body('detailBarang').trim().notEmpty().withMessage('Detail barang wajib diisi'),
   body('cogs').exists().withMessage('COGS wajib diisi').bail().isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
-  body('hargaJual').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Harga jual harus angka >= 0'),
-  body('offeringPengepul').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Offering pengepul harus angka >= 0'),
   body('perusahaan').optional({ nullable: true, checkFalsy: true }).isIn(PERUSAHAAN).withMessage('Perusahaan tidak valid'),
 ];
 
@@ -41,9 +39,20 @@ const updateItemRules = [
   body('jenisBarang').optional().trim().notEmpty().withMessage('Jenis barang tidak boleh kosong'),
   body('detailBarang').optional().trim().notEmpty().withMessage('Detail barang tidak boleh kosong'),
   body('cogs').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
-  body('hargaJual').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Harga jual harus angka >= 0'),
-  body('offeringPengepul').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Offering pengepul harus angka >= 0'),
   body('perusahaan').optional({ nullable: true, checkFalsy: true }).isIn(PERUSAHAAN).withMessage('Perusahaan tidak valid'),
+];
+
+// ── Penjualan langsung (struk) ──
+const JENIS_PEMBELI = ['KARYAWAN_INTERNAL', 'EKSTERNAL', 'PENGEPUL'];
+const jualItemsRules = [
+  body('namaPelanggan').trim().notEmpty().withMessage('Nama pelanggan wajib diisi').bail().isLength({ max: 150 }).withMessage('Nama pelanggan maksimal 150 karakter'),
+  body('namaSales').trim().notEmpty().withMessage('Nama sales wajib diisi').bail().isLength({ max: 150 }).withMessage('Nama sales maksimal 150 karakter'),
+  body('noTelepon').optional({ nullable: true, checkFalsy: true }).isLength({ max: 30 }).withMessage('Nomor telepon maksimal 30 karakter'),
+  body('tanggal').notEmpty().withMessage('Tanggal wajib diisi'),
+  body('jenisPembeli').isIn(JENIS_PEMBELI).withMessage('Jenis pembeli harus Karyawan Internal, Eksternal, atau Pengepul'),
+  body('items').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 barang harus dipilih (maks 500)'),
+  body('items.*.id').isInt().withMessage('ID barang tidak valid'),
+  body('items.*.hargaJual').isFloat({ gt: 0 }).withMessage('Harga jual setiap barang harus lebih dari 0'),
 ];
 
 // ── Invoice ──
@@ -171,6 +180,7 @@ module.exports = {
   changePasswordRules,
   createItemRules,
   updateItemRules,
+  jualItemsRules,
   createInvoiceRules,
   updateInvoiceRules,
   updateInvoiceItemsRules,

@@ -7,10 +7,9 @@ import { useAuth } from '../../contexts/AuthContext'
 const dashboardItem = { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true }
 const katalogItem = { to: '/katalog', label: 'Katalog Emas', icon: Gem }
 
-// Grup Elektronik — dropdown berisi Data Elektronik, Invoice, Riwayat
+// Grup Elektronik — dropdown berisi Data Elektronik & Riwayat Penjualan
 const elektronikItems = [
   { to: '/elektronik', label: 'Data Elektronik', icon: Package },
-  { to: '/invoice', label: 'Invoice', icon: FileText },
   { to: '/riwayat', label: 'Riwayat Penjualan', icon: History },
 ]
 
