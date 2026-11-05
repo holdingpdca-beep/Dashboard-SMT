@@ -509,11 +509,12 @@ const exportExcel = async (req, res, next) => {
   }
 };
 
-// Nomor struk sekuensial: STR-YYYY-NNNN (mis. STR-2026-0001), diambil dari
-// nomor terbesar tahun berjalan + 1. Tabrakan ditangani retry di jualItems.
+// Nomor invoice/struk sekuensial: SMT-YYYY-NNNN (mis. SMT-2026-0001) — kode PT + tahun +
+// running number, diambil dari nomor terbesar tahun berjalan + 1. Tabrakan ditangani retry
+// di jualItems. (Sebelumnya prefix "STR-"; nomor lama STR-YYYY-NNNN tetap tersimpan apa adanya.)
 async function generateNomorStruk() {
   const year = new Date().getFullYear();
-  const prefix = `STR-${year}-`;
+  const prefix = `SMT-${year}-`;
   const last = await prisma.elektronik.findFirst({
     where: { nomorStruk: { startsWith: prefix } },
     orderBy: { nomorStruk: 'desc' },
