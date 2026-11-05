@@ -46,6 +46,10 @@ model Elektronik {
   detailBarang     String        @map("detail_barang")
   keterangan       String?       @db.Text
   cogs             Decimal       @db.Decimal(15, 2)
+  // Override harga jual (opsional, dari import Excel). NULL = dihitung otomatis dari COGS.
+  hjMin            Decimal?      @map("hj_min") @db.Decimal(15, 2)
+  hjMax            Decimal?      @map("hj_max") @db.Decimal(15, 2)
+  hargaSmt         Decimal?      @map("harga_smt") @db.Decimal(15, 2)
   offeringPengepul Decimal?      @map("offering_pengepul") @db.Decimal(15, 2)
   hargaJual        Decimal?      @map("harga_jual") @db.Decimal(15, 2)
   ppn              Decimal?      @db.Decimal(15, 2)
@@ -55,6 +59,13 @@ model Elektronik {
   perusahaan       Perusahaan    @default(SERBA_MAS)
   tanggalLelang    DateTime?     @map("tanggal_lelang")
   tanggalMasuk     DateTime      @default(now()) @map("tanggal_masuk")
+  // ── Data penjualan langsung (struk) ──
+  tanggalJual      DateTime?     @map("tanggal_jual")
+  namaPelanggan    String?       @map("nama_pelanggan")
+  noTelepon        String?       @map("no_telepon")
+  namaSales        String?       @map("nama_sales")
+  jenisPembeli     JenisPembeli? @map("jenis_pembeli")
+  nomorStruk       String?       @map("nomor_struk")
   createdAt        DateTime      @default(now()) @map("created_at")
   updatedAt        DateTime      @updatedAt @map("updated_at")
   invoiceItems     InvoiceItem[]
@@ -64,7 +75,15 @@ model Elektronik {
   @@index([grade])
   @@index([tanggalMasuk])
   @@index([tanggalLelang])
+  @@index([tanggalJual])
+  @@index([nomorStruk])
   @@map("elektronik")
+}
+
+enum JenisPembeli {
+  KARYAWAN_INTERNAL
+  EKSTERNAL
+  PENGEPUL
 }
 
 model Invoice {

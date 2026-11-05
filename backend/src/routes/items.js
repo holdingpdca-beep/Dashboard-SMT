@@ -4,8 +4,8 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const { requireRole, ELEKTRONIK_ROLES } = require('../middleware/roleCheck');
 const { handleValidation } = require('../middleware/validate');
-const { createItemRules, updateItemRules } = require('../middleware/validators');
-const { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat } = require('../controllers/itemController');
+const { createItemRules, updateItemRules, jualItemsRules } = require('../middleware/validators');
+const { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, exportRiwayat } = require('../controllers/itemController');
 
 // Whitelist tipe file Excel untuk import
 const EXCEL_MIME = [
@@ -27,7 +27,9 @@ router.use(auth, requireRole(...ELEKTRONIK_ROLES));
 
 router.get('/stats', getStats);
 router.get('/export', exportExcel);
+router.get('/riwayat/export', exportRiwayat);
 router.get('/riwayat', getRiwayat);
+router.post('/jual', jualItemsRules, handleValidation, jualItems);
 router.get('/', getItems);
 router.get('/:id', getItemById);
 router.post('/', requireRole('ADMIN', 'SUPER_USER'), createItemRules, handleValidation, createItem);

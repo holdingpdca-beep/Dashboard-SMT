@@ -82,7 +82,7 @@ export default function Navbar({ onMenuToggle, title }) {
       setJumlahBelumDibaca(prev => Math.max(0, prev - 1))
     }
     setOpen(false)
-    if (notif.invoiceId) navigate('/invoice')
+    if (notif.invoiceId) navigate('/riwayat')
   }
 
   async function handleBacaSemua() {

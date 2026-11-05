@@ -4,7 +4,6 @@ import Layout from './components/Layout/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Elektronik from './pages/Elektronik'
-import Invoice from './pages/Invoice'
 import Riwayat from './pages/Riwayat'
 import Katalog from './pages/Katalog'
 import BarangArt from './pages/BarangArt'
@@ -54,7 +53,6 @@ export default function App() {
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={homeElement} />
         <Route path="elektronik" element={<BlockKatalogUser><Elektronik /></BlockKatalogUser>} />
-        <Route path="invoice"    element={<BlockKatalogUser><Invoice /></BlockKatalogUser>} />
         <Route path="riwayat"    element={<BlockKatalogUser><Riwayat /></BlockKatalogUser>} />
         <Route path="katalog"    element={<Katalog />} />
         <Route path="barang-art/logam-mulia" element={<AdminRoute><BarangArt kategori="LOGAM_MULIA" /></AdminRoute>} />
