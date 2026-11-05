@@ -117,6 +117,15 @@ function withHarga(item) {
   return { ...item, hjMin, hjMax, hargaSmt };
 }
 
+// M-03: Sembunyikan data pribadi pelanggan (nama & nomor telepon) dari role
+// non-admin, KECUALI penjualan yang dibuat oleh user itu sendiri (soldById).
+// ADMIN/SUPER_USER tetap melihat seluruh data. Tidak mengubah objek asli.
+function sanitizeCustomer(item, user) {
+  if (!item || canSeeAll(user)) return item;
+  if (item.soldById && user?.id && item.soldById === user.id) return item;
+  return { ...item, namaPelanggan: null, noTelepon: null };
+}
+
 const buildWhere = (query, userRole) => {
   const { search, grade, status, startDate, endDate, jenisBarang, perusahaan } = query;
   const where = {};
@@ -169,9 +178,9 @@ const getItems = async (req, res, next) => {
 
     const hideCogs = !canSeeAll(req.user);
     const data = items.map(i => {
-      const withH = withHarga(i);
-      if (hideCogs) { const { cogs, profit, ...rest } = withH; return rest; }
-      return withH;
+      let withH = withHarga(i);
+      if (hideCogs) { const { cogs, profit, ...rest } = withH; withH = rest; }
+      return sanitizeCustomer(withH, req.user);
     });
 
     res.json({
@@ -192,7 +201,7 @@ const getItemById = async (req, res, next) => {
     const withH = withHarga(item);
     if (!canSeeAll(req.user)) {
       const { cogs, profit, ...rest } = withH;
-      return res.json({ success: true, data: rest });
+      return res.json({ success: true, data: sanitizeCustomer(rest, req.user) });
     }
     res.json({ success: true, data: withH });
   } catch (err) {
@@ -365,7 +374,9 @@ const importExcel = async (req, res, next) => {
     const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
     const headers = (aoa[0] || []).map(h => String(h));
     const rows = aoa.slice(1).map(arr => {
-      const obj = {};
+      // Object.create(null): kunci diambil dari teks header Excel, jadi hindari
+      // pencemaran prototipe bila ada header seperti "__proto__" (L-06).
+      const obj = Object.create(null);
       headers.forEach((h, i) => { obj[h] = arr[i]; });
       return obj;
     });
@@ -559,6 +570,23 @@ const jualItems = async (req, res, next) => {
       return res.status(400).json({ success: false, message: `Barang sudah terjual: ${sudah.map(b => b.nomorSbg).join(', ')}` });
     }
 
+    // H-02: role non-admin tidak boleh menjual di bawah HJ MIN. ADMIN/SUPER_USER
+    // boleh memberi harga khusus (mis. diskon) tanpa batas minimum.
+    if (!canSeeAll(req.user)) {
+      const dibawah = [];
+      for (const b of barang) {
+        const net = hargaById.get(b.id);
+        const { hjMin } = hargaEfektif(b.cogs, { hjMin: b.hjMin, hjMax: b.hjMax, hargaSmt: b.hargaSmt });
+        if (net < hjMin) dibawah.push(`${b.nomorSbg} (min ${hjMin.toLocaleString('id-ID')})`);
+      }
+      if (dibawah.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Harga di bawah HJ MIN untuk: ${dibawah.join(', ')}. Hanya ADMIN yang dapat menjual di bawah HJ MIN.`,
+        });
+      }
+    }
+
     // Buat nomor struk + simpan penjualan dalam satu transaksi atomik (+ retry nomor tabrakan)
     let nomorStruk = null;
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -579,6 +607,7 @@ const jualItems = async (req, res, next) => {
                 offeringPengepul: null,
                 tanggalJual, namaPelanggan, noTelepon: noTelepon || null,
                 namaSales, jenisPembeli, nomorStruk,
+                soldById: req.user.id,
               },
             });
             if (r.count !== 1) {
@@ -616,6 +645,65 @@ const jualItems = async (req, res, next) => {
       message: `Penjualan berhasil — Struk ${nomorStruk}`,
       data: { nomorStruk, namaPelanggan, noTelepon: noTelepon || null, namaSales, jenisPembeli, tanggalJual, items: strukItems },
     });
+  } catch (err) {
+    if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
+    next(err);
+  }
+};
+
+// H-02: Pembatalan (void) penjualan langsung — khusus ADMIN. Mengembalikan SELURUH
+// barang pada satu nomor struk ke status BELUM_TERJUAL secara atomik, menghapus data
+// penjualan, dan mengembalikan harga ke rumus COGS. Alasan wajib diisi & tercatat di audit.
+const voidStruk = async (req, res, next) => {
+  try {
+    const nomorStruk = String(req.params.nomorStruk || '').trim();
+    const alasan = String(req.body?.alasan || '').trim();
+    if (!nomorStruk) {
+      return res.status(400).json({ success: false, message: 'Nomor struk wajib diisi' });
+    }
+    if (!alasan) {
+      return res.status(400).json({ success: false, message: 'Alasan pembatalan wajib diisi' });
+    }
+
+    const barang = await prisma.elektronik.findMany({ where: { nomorStruk, status: 'TERJUAL' } });
+    if (barang.length === 0) {
+      return res.status(404).json({ success: false, message: 'Struk tidak ditemukan atau barangnya sudah tidak berstatus terjual' });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const b of barang) {
+        // Kembalikan harga jual/ppn/total/profit ke hasil hitung dari COGS (reset harga manual)
+        const h = hitungHarga(b.cogs);
+        const r = await tx.elektronik.updateMany({
+          where: { id: b.id, status: 'TERJUAL', nomorStruk },
+          data: {
+            status: 'BELUM_TERJUAL',
+            hargaJual: h.hargaJual, ppn: h.ppn, totalHarga: h.totalHarga, profit: h.profit,
+            offeringPengepul: null,
+            tanggalJual: null, namaPelanggan: null, noTelepon: null,
+            namaSales: null, jenisPembeli: null, nomorStruk: null, soldById: null,
+          },
+        });
+        if (r.count !== 1) {
+          throw Object.assign(new Error(`Barang ${b.nomorSbg} berubah status saat pembatalan, coba lagi`), { status: 409 });
+        }
+      }
+    });
+
+    await createAuditLog({
+      userId: req.user.id,
+      namaUser: req.user.nama,
+      aktivitas: `BATALKAN (VOID) Struk ${nomorStruk} — ${barang.length} barang dikembalikan ke stok. Alasan: ${alasan}`,
+      tabel: 'Elektronik',
+      dataLama: {
+        nomorStruk,
+        jumlah: barang.length,
+        items: barang.map(b => ({ nomorSbg: b.nomorSbg, namaPelanggan: b.namaPelanggan, namaSales: b.namaSales, hargaJual: b.hargaJual })),
+      },
+      ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: `Struk ${nomorStruk} dibatalkan — ${barang.length} barang kembali ke stok` });
   } catch (err) {
     if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
     next(err);
@@ -801,10 +889,14 @@ const getRiwayat = async (req, res, next) => {
 
     const bolehLihatSemua = canSeeAll(req.user);
 
-    // Sembunyikan COGS & profit dari role non-admin (H-02).
+    // Sembunyikan COGS & profit dari role non-admin (H-02),
+    // dan data pribadi pelanggan milik sales lain (M-03).
     const dataAman = bolehLihatSemua
       ? items
-      : items.map((item) => { const { cogs, profit, ...rest } = item; return rest; });
+      : items.map((item) => {
+          const { cogs, profit, ...rest } = item;
+          return sanitizeCustomer(rest, req.user);
+        });
 
     res.json({
       success: true,
@@ -899,4 +991,4 @@ const exportRiwayat = async (req, res, next) => {
   }
 };
 
-module.exports = { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, exportRiwayat };
+module.exports = { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, voidStruk, exportRiwayat };

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { History, Search, Filter, RefreshCw, Eye, ChevronLeft, ChevronRight, Package, TrendingUp, DollarSign, Printer, Download } from 'lucide-react'
+import { History, Search, Filter, RefreshCw, Eye, ChevronLeft, ChevronRight, Package, TrendingUp, DollarSign, Printer, Download, Ban } from 'lucide-react'
 import api from '../utils/api'
 import toast from 'react-hot-toast'
 import Modal from '../components/UI/Modal'
@@ -8,7 +8,7 @@ import { formatRupiah, formatDate, GRADE_COLORS, JENIS_PEMBELI_LABELS, JENIS_PEM
 import { printStrukPDF } from '../utils/pdfStruk'
 
 export default function Riwayat() {
-  const { canSeeCogs } = useAuth()
+  const { canSeeCogs, isAdmin } = useAuth()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -16,6 +16,9 @@ export default function Riwayat() {
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 50, totalPages: 1 })
   const [viewItem, setViewItem] = useState(null)
   const [summary, setSummary] = useState({ totalBarang: 0, totalProfit: 0, totalHargaJual: 0, totalPpn: 0, totalNilai: 0 })
+  const [voidItem, setVoidItem] = useState(null)
+  const [voidReason, setVoidReason] = useState('')
+  const [voiding, setVoiding] = useState(false)
 
   const fetchRiwayat = async (page = 1) => {
     setLoading(true)
@@ -57,6 +60,23 @@ export default function Riwayat() {
       toast.success('Download berhasil')
     } catch {
       toast.error('Gagal download')
+    }
+  }
+
+  // Batalkan (void) seluruh penjualan pada 1 nomor struk — khusus ADMIN
+  const handleVoid = async () => {
+    if (!voidItem?.nomorStruk) return
+    if (!voidReason.trim()) { toast.error('Alasan pembatalan wajib diisi'); return }
+    setVoiding(true)
+    try {
+      await api.post(`/items/struk/${encodeURIComponent(voidItem.nomorStruk)}/void`, { alasan: voidReason.trim() })
+      toast.success('Penjualan dibatalkan — barang kembali ke stok')
+      setVoidItem(null); setVoidReason(''); setViewItem(null)
+      fetchRiwayat(pagination.page)
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Gagal membatalkan penjualan')
+    } finally {
+      setVoiding(false)
     }
   }
 
@@ -143,9 +163,11 @@ export default function Riwayat() {
 
           <button type="button" onClick={handleSearch} className="btn-primary text-sm">Cari</button>
 
-          <button onClick={handleExport} className="btn-outline flex items-center gap-2 text-sm">
-            <Download className="w-4 h-4" /> Download Excel
-          </button>
+          {canSeeCogs() && (
+            <button onClick={handleExport} className="btn-outline flex items-center gap-2 text-sm">
+              <Download className="w-4 h-4" /> Download Excel
+            </button>
+          )}
 
           <button onClick={() => fetchRiwayat(pagination.page)} className="btn-outline p-2.5">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -230,6 +252,11 @@ export default function Riwayat() {
                       {item.nomorStruk && (
                         <button onClick={() => cetakStruk(item)} className="p-1.5 rounded-lg text-brown-400 hover:text-gold-500 hover:bg-gold-50 dark:hover:bg-gold-900/20 transition-colors" title="Cetak Struk">
                           <Printer className="w-4 h-4" />
+                        </button>
+                      )}
+                      {isAdmin() && item.nomorStruk && (
+                        <button onClick={() => { setVoidItem(item); setVoidReason('') }} className="p-1.5 rounded-lg text-brown-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors" title="Batalkan Penjualan">
+                          <Ban className="w-4 h-4" />
                         </button>
                       )}
                     </div>
@@ -333,10 +360,55 @@ export default function Riwayat() {
             </div>
 
             {viewItem.nomorStruk && (
-              <button onClick={() => cetakStruk(viewItem)} className="btn-primary w-full flex items-center justify-center gap-2">
-                <Printer className="w-4 h-4" /> Cetak Struk
-              </button>
+              <div className="flex gap-2">
+                <button onClick={() => cetakStruk(viewItem)} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                  <Printer className="w-4 h-4" /> Cetak Struk
+                </button>
+                {isAdmin() && (
+                  <button onClick={() => { setVoidItem(viewItem); setVoidReason('') }} className="btn-outline flex items-center justify-center gap-2 text-red-600 border-red-200 hover:bg-red-50 dark:border-red-900/40 dark:hover:bg-red-900/20">
+                    <Ban className="w-4 h-4" /> Batalkan
+                  </button>
+                )}
+              </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal Konfirmasi Pembatalan (Void) — khusus ADMIN */}
+      <Modal
+        isOpen={!!voidItem}
+        onClose={() => { if (!voiding) { setVoidItem(null); setVoidReason('') } }}
+        title="Batalkan Penjualan"
+        size="sm"
+        footer={
+          <>
+            <button onClick={() => { setVoidItem(null); setVoidReason('') }} disabled={voiding} className="btn-outline">Kembali</button>
+            <button onClick={handleVoid} disabled={voiding} className="btn-danger flex items-center gap-2">
+              <Ban className="w-4 h-4" /> {voiding ? 'Memproses...' : 'Batalkan Penjualan'}
+            </button>
+          </>
+        }
+      >
+        {voidItem && (
+          <div className="space-y-3">
+            <p className="text-sm text-brown-700 dark:text-brown-300">
+              Seluruh barang pada struk <strong>{voidItem.nomorStruk}</strong> akan dikembalikan ke stok
+              (status <strong>Belum Terjual</strong>) dan data penjualannya dihapus. Tindakan ini tercatat di audit log.
+            </p>
+            <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 text-xs text-red-700 dark:text-red-400">
+              Pastikan barang fisik memang belum/tidak jadi diserahkan ke pelanggan.
+            </div>
+            <div>
+              <label className="label">Alasan Pembatalan *</label>
+              <textarea
+                value={voidReason}
+                onChange={e => setVoidReason(e.target.value)}
+                className="input-field"
+                rows={3}
+                placeholder="Contoh: salah input harga / pelanggan batal / salah barang"
+              />
+            </div>
           </div>
         )}
       </Modal>

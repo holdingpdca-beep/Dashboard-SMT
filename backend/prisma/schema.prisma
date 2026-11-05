@@ -66,6 +66,9 @@ model Elektronik {
   namaSales        String?       @map("nama_sales")
   jenisPembeli     JenisPembeli? @map("jenis_pembeli")
   nomorStruk       String?       @map("nomor_struk")
+  // M-03: pencatat penjual (user yg melakukan penjualan). Dipakai agar role non-admin
+  // hanya melihat data pribadi pelanggan dari penjualan miliknya sendiri.
+  soldById         Int?          @map("sold_by_id")
   createdAt        DateTime      @default(now()) @map("created_at")
   updatedAt        DateTime      @updatedAt @map("updated_at")
   invoiceItems     InvoiceItem[]
@@ -77,6 +80,7 @@ model Elektronik {
   @@index([tanggalLelang])
   @@index([tanggalJual])
   @@index([nomorStruk])
+  @@index([soldById])
   @@map("elektronik")
 }
 
