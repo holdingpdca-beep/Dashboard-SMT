@@ -5,11 +5,13 @@ import { terbilang } from './terbilang'
 
 const LOGO_SMT = '/logos/logo-smt.png'
 
-// Nama file PDF: ubah prefix nomor struk menjadi INV-SMT.
-// STR-2026-0011 -> INV-SMT-2026-0011 (2026 = tahun, 0011 = running number).
+// Nama file PDF invoice. Nomor baru berformat SMT-YYYY-NNNN → file INV-SMT-YYYY-NNNN.
+// Nomor lama STR-YYYY-NNNN tetap kompatibel (ikut jadi INV-SMT-YYYY-NNNN).
 function strukFileName(struk) {
   const nomor = struk.nomorStruk || 'STRUK'
-  return nomor.startsWith('STR-') ? nomor.replace(/^STR-/, 'INV-SMT-') : `INV-SMT-${nomor}`
+  if (nomor.startsWith('SMT-')) return `INV-${nomor}`                    // SMT-2026-0001 -> INV-SMT-2026-0001
+  if (nomor.startsWith('STR-')) return nomor.replace(/^STR-/, 'INV-SMT-') // lama: STR-2026-0013 -> INV-SMT-2026-0013
+  return `INV-SMT-${nomor}`
 }
 
 // Muat gambar sebagai base64 + ukuran aslinya (untuk jaga rasio aspek)

@@ -509,11 +509,12 @@ const exportExcel = async (req, res, next) => {
   }
 };
 
-// Nomor struk sekuensial: STR-YYYY-NNNN (mis. STR-2026-0001), diambil dari
-// nomor terbesar tahun berjalan + 1. Tabrakan ditangani retry di jualItems.
+// Nomor invoice/struk sekuensial: SMT-YYYY-NNNN (mis. SMT-2026-0001) — kode PT + tahun +
+// running number, diambil dari nomor terbesar tahun berjalan + 1. Tabrakan ditangani retry
+// di jualItems. (Sebelumnya prefix "STR-"; nomor lama STR-YYYY-NNNN tetap tersimpan apa adanya.)
 async function generateNomorStruk() {
   const year = new Date().getFullYear();
-  const prefix = `STR-${year}-`;
+  const prefix = `SMT-${year}-`;
   const last = await prisma.elektronik.findFirst({
     where: { nomorStruk: { startsWith: prefix } },
     orderBy: { nomorStruk: 'desc' },
@@ -991,4 +992,82 @@ const exportRiwayat = async (req, res, next) => {
   }
 };
 
-module.exports = { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, voidStruk, exportRiwayat };
+// ── Katalog Publik (tanpa login) ──
+// Menampilkan barang elektronik yang BELUM TERJUAL untuk umum.
+// Hanya field aman yang dibuka: nama barang, keterangan, grade, HARGA SMT.
+// COGS / profit / data pelanggan TIDAK PERNAH dikirim. Barang yang sudah terjual
+// otomatis tidak muncul karena difilter status = BELUM_TERJUAL.
+const getPublicKatalog = async (req, res, next) => {
+  try {
+    const page = toInt(req.query.page, 1, 1, 1e9);
+    const limit = toInt(req.query.limit, 24, 1, 60);
+    const skip = (page - 1) * limit;
+
+    const where = { status: 'BELUM_TERJUAL' };
+    if (req.query.search) {
+      where.OR = [
+        { detailBarang: { contains: req.query.search } },
+        { keterangan: { contains: req.query.search } },
+        { jenisBarang: { contains: req.query.search } },
+      ];
+    }
+    if (['A', 'B', 'C', 'D'].includes(req.query.grade)) where.grade = req.query.grade;
+    // Filter kategori (jenis barang: Handphone, Tablet, Laptop, dll) — cocok persis
+    if (req.query.kategori) where.jenisBarang = req.query.kategori;
+
+    const [total, items, kategoriRows] = await Promise.all([
+      prisma.elektronik.count({ where }),
+      prisma.elektronik.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        // Ambil cogs & override harga HANYA untuk menghitung HARGA SMT (tidak dikirim keluar)
+        select: {
+          id: true,
+          detailBarang: true,
+          keterangan: true,
+          grade: true,
+          jenisBarang: true,
+          cogs: true,
+          hjMin: true,
+          hjMax: true,
+          hargaSmt: true,
+        },
+      }),
+      // Daftar kategori yang tersedia (dari seluruh barang belum terjual, tanpa
+      // terpengaruh filter aktif) untuk mengisi dropdown kategori di frontend.
+      prisma.elektronik.findMany({
+        where: { status: 'BELUM_TERJUAL' },
+        distinct: ['jenisBarang'],
+        select: { jenisBarang: true },
+        orderBy: { jenisBarang: 'asc' },
+      }),
+    ]);
+
+    const kategoriList = kategoriRows.map(r => r.jenisBarang).filter(Boolean);
+
+    const data = items.map(i => {
+      const { hargaSmt } = withHarga(i);
+      return {
+        id: i.id,
+        nama: i.detailBarang,
+        keterangan: i.keterangan,
+        grade: i.grade,
+        jenisBarang: i.jenisBarang,
+        hargaSmt,
+      };
+    });
+
+    res.json({
+      success: true,
+      data,
+      kategoriList,
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, voidStruk, exportRiwayat, getPublicKatalog };
