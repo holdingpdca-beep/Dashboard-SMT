@@ -16,6 +16,7 @@ const katalogRoutes = require('./src/routes/katalog');
 const notifikasiRoutes = require('./src/routes/notifikasi');
 const cabangRoutes = require('./src/routes/cabang');
 const barangArtRoutes = require('./src/routes/barangArt');
+const katalogPublikRoutes = require('./src/routes/katalogPublik');
 
 // ── Validasi environment variable wajib saat startup ──
 const requiredEnv = ['DATABASE_URL', 'JWT_SECRET'];
@@ -130,6 +131,8 @@ app.use('/api/katalog', katalogRoutes);
 app.use('/api/notifikasi', notifikasiRoutes);
 app.use('/api/cabang', cabangRoutes);
 app.use('/api/barang-art', barangArtRoutes);
+// Katalog elektronik publik — tanpa autentikasi (bisa diakses siapa saja)
+app.use('/api/katalog-elektronik', katalogPublikRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Dashboard SMT Backend Running', timestamp: new Date() });

@@ -64,35 +64,36 @@ export default function Elektronik() {
   const fileRef = useRef()
 
   // ── Penjualan (pilih barang → struk) ──
-  const [selected, setSelected] = useState(new Set())
+  // selected = Map(id -> item) agar pilihan bertahan lintas halaman & pencarian
+  const [selected, setSelected] = useState(new Map())
   const [showJual, setShowJual] = useState(false)
   const [jualForm, setJualForm] = useState(emptyJual)
   const [jualPrices, setJualPrices] = useState({}) // { [id]: { net, total } }
   const [jualLoading, setJualLoading] = useState(false)
   const [struk, setStruk] = useState(null)
 
-  const toggleSelect = (id) => {
+  const toggleSelect = (item) => {
     setSelected(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
+      const next = new Map(prev)
+      if (next.has(item.id)) next.delete(item.id); else next.set(item.id, item)
       return next
     })
   }
   const toggleSelectAll = () => {
     setSelected(prev => {
-      const allIds = items.map(i => i.id)
-      const allSelected = allIds.length > 0 && allIds.every(id => prev.has(id))
+      const allSelected = items.length > 0 && items.every(i => prev.has(i.id))
+      const next = new Map(prev)
       if (allSelected) {
-        const next = new Set(prev)
-        allIds.forEach(id => next.delete(id))
-        return next
+        items.forEach(i => next.delete(i.id))
+      } else {
+        items.forEach(i => next.set(i.id, i))
       }
-      return new Set([...prev, ...allIds])
+      return next
     })
   }
 
   const openJual = () => {
-    const chosen = items.filter(i => selected.has(i.id))
+    const chosen = Array.from(selected.values())
     if (chosen.length === 0) return toast.error('Pilih minimal 1 barang')
     // Prefill harga dengan HARGA SMT (bisa diubah manual)
     const prices = {}
@@ -114,7 +115,7 @@ export default function Elektronik() {
     setJualPrices(p => ({ ...p, [id]: { total: val, net: total ? String(Math.round(total / (1 + PPN_RATE))) : '' } }))
   }
 
-  const chosenItems = items.filter(i => selected.has(i.id))
+  const chosenItems = Array.from(selected.values())
   const jualGrandTotal = chosenItems.reduce((s, i) => {
     const net = parseFloat(jualPrices[i.id]?.net) || 0
     return s + Math.round(net * (1 + PPN_RATE))
@@ -140,7 +141,7 @@ export default function Elektronik() {
       const { data } = await api.post('/items/jual', { ...jualForm, items: payloadItems })
       setStruk(data.data)
       setShowJual(false)
-      setSelected(new Set())
+      setSelected(new Map())
       toast.success(data.message || 'Penjualan berhasil')
       fetchItems()
     } catch (err) {
@@ -401,7 +402,7 @@ export default function Elektronik() {
                       type="checkbox"
                       className="accent-emerald-600 cursor-pointer"
                       checked={selected.has(item.id)}
-                      onChange={() => toggleSelect(item.id)}
+                      onChange={() => toggleSelect(item)}
                     />
                   </td>
                   <td className="table-cell text-center text-brown-400">{(pagination.page - 1) * pagination.limit + idx + 1}</td>

@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Elektronik from './pages/Elektronik'
 import Riwayat from './pages/Riwayat'
 import Katalog from './pages/Katalog'
+import KatalogElektronik from './pages/KatalogElektronik'
 import BarangArt from './pages/BarangArt'
 import Users from './pages/Users'
 import AuditLog from './pages/AuditLog'
@@ -49,6 +50,8 @@ export default function App() {
 
   return (
     <Routes>
+      {/* Katalog elektronik publik — bisa diakses siapa saja tanpa login */}
+      <Route path="/katalog-elektronik" element={<KatalogElektronik />} />
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={homeElement} />
