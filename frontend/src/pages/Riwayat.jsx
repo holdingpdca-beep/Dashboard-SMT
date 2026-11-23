@@ -97,7 +97,7 @@ export default function Riwayat() {
     })
   }
 
-  const colCount = canSeeCogs() ? 16 : 14
+  const colCount = canSeeCogs() ? 17 : 15
 
   return (
     <div className="space-y-4">
@@ -188,6 +188,7 @@ export default function Riwayat() {
                 <th className="table-header w-12">No</th>
                 <th className="table-header">Tanggal Jual</th>
                 <th className="table-header">Tanggal Serah Terima</th>
+                <th className="table-header">Vendor</th>
                 <th className="table-header">Nomor SBG</th>
                 <th className="table-header">Jenis Barang</th>
                 <th className="table-header">Grade</th>
@@ -222,6 +223,7 @@ export default function Riwayat() {
                   <td className="table-cell text-center text-brown-400">{(pagination.page - 1) * 50 + idx + 1}</td>
                   <td className="table-cell whitespace-nowrap">{formatDate(item.tanggalJual || item.updatedAt)}</td>
                   <td className="table-cell whitespace-nowrap">{formatDate(item.tanggalLelang)}</td>
+                  <td className="table-cell">{item.vendor || '-'}</td>
                   <td className="table-cell font-mono font-medium text-brown-800 dark:text-gold-300">{item.nomorSbg}</td>
                   <td className="table-cell font-medium">{item.jenisBarang}</td>
                   <td className="table-cell"><span className={GRADE_COLORS[item.grade]}>{item.grade}</span></td>
@@ -309,6 +311,7 @@ export default function Riwayat() {
                 {[
                   ['Nomor SBG', viewItem.nomorSbg],
                   ['Tanggal Serah Terima', formatDate(viewItem.tanggalLelang)],
+                  ['Vendor', viewItem.vendor || '-'],
                   ['Jenis Barang', viewItem.jenisBarang],
                   ['Grade', viewItem.grade],
                   ['Nama Barang', viewItem.detailBarang],

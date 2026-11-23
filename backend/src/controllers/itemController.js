@@ -133,6 +133,7 @@ const buildWhere = (query, userRole) => {
   if (search) {
     where.OR = [
       { nomorSbg: { contains: search } },
+      { vendor: { contains: search } },
       { jenisBarang: { contains: search } },
       { detailBarang: { contains: search } },
       { keterangan: { contains: search } },
@@ -211,7 +212,7 @@ const getItemById = async (req, res, next) => {
 
 const createItem = async (req, res, next) => {
   try {
-    const { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, perusahaan, tanggalLelang } = req.body;
+    const { nomorSbg, vendor, grade, jenisBarang, detailBarang, keterangan, cogs, perusahaan, tanggalLelang } = req.body;
 
     if (!nomorSbg || !grade || !jenisBarang || !detailBarang || cogs === undefined) {
       return res.status(400).json({ success: false, message: 'Field wajib tidak lengkap' });
@@ -227,6 +228,7 @@ const createItem = async (req, res, next) => {
     const item = await prisma.elektronik.create({
       data: {
         nomorSbg,
+        vendor: vendor ? String(vendor).trim() : null,
         grade,
         jenisBarang,
         detailBarang,
@@ -264,7 +266,7 @@ const updateItem = async (req, res, next) => {
     if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
 
     // status TIDAK diterima dari body — hanya bisa berubah lewat flow invoice (approve/cancel)
-    const { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, perusahaan, tanggalLelang } = req.body;
+    const { nomorSbg, vendor, grade, jenisBarang, detailBarang, keterangan, cogs, perusahaan, tanggalLelang } = req.body;
 
     // Barang yang sudah TERJUAL tidak boleh diubah harganya (jaga konsistensi dengan snapshot invoice)
     if (existing.status === 'TERJUAL' && cogs !== undefined) {
@@ -284,6 +286,7 @@ const updateItem = async (req, res, next) => {
       where: { id },
       data: {
         nomorSbg: nomorSbg || existing.nomorSbg,
+        vendor: vendor !== undefined ? (vendor ? String(vendor).trim() : null) : existing.vendor,
         grade: grade || existing.grade,
         jenisBarang: jenisBarang || existing.jenisBarang,
         detailBarang: detailBarang || existing.detailBarang,
@@ -395,6 +398,7 @@ const importExcel = async (req, res, next) => {
     for (const row of rows) {
       try {
         const nomorSbg = String(row[mappingObj.nomorSbg] || '').trim();
+        const vendor = mappingObj.vendor ? (String(row[mappingObj.vendor] || '').trim() || null) : null;
         const jenisBarang = String(row[mappingObj.jenisBarang] || '').trim();
         const detailBarang = String(row[mappingObj.detailBarang] || '').trim();
         const grade = String(row[mappingObj.grade] || '').trim().toUpperCase();
@@ -425,12 +429,12 @@ const importExcel = async (req, res, next) => {
           }
           await prisma.elektronik.update({
             where: { nomorSbg },
-            data: { grade, jenisBarang, detailBarang, keterangan, cogs, hjMin: ovHjMin, hjMax: ovHjMax, hargaSmt: ovHargaSmt, offeringPengepul: null, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', ...(tanggalLelang ? { tanggalLelang } : {}) },
+            data: { grade, jenisBarang, detailBarang, keterangan, cogs, hjMin: ovHjMin, hjMax: ovHjMax, hargaSmt: ovHargaSmt, offeringPengepul: null, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', ...(mappingObj.vendor ? { vendor } : {}), ...(tanggalLelang ? { tanggalLelang } : {}) },
           });
           duplicate++;
         } else {
           await prisma.elektronik.create({
-            data: { nomorSbg, grade, jenisBarang, detailBarang, keterangan, cogs, hjMin: ovHjMin, hjMax: ovHjMax, hargaSmt: ovHargaSmt, offeringPengepul: null, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', tanggalLelang },
+            data: { nomorSbg, vendor, grade, jenisBarang, detailBarang, keterangan, cogs, hjMin: ovHjMin, hjMax: ovHjMax, hargaSmt: ovHargaSmt, offeringPengepul: null, hargaJual, ppn, totalHarga, profit, perusahaan: perusahaan || 'SERBA_MAS', tanggalLelang },
           });
           berhasil++;
         }
@@ -471,6 +475,7 @@ const exportExcel = async (req, res, next) => {
       const row = {
         No: idx + 1,
         'Tanggal Serah Terima': item.tanggalLelang ? new Date(item.tanggalLelang).toLocaleDateString('id-ID') : '',
+        Vendor: item.vendor || '',
         'Nomor SBG': item.nomorSbg,
         'Jenis Barang': item.jenisBarang,
         Grade: item.grade,
@@ -867,6 +872,7 @@ const getRiwayat = async (req, res, next) => {
         { jenisBarang: { contains: search } },
         { detailBarang: { contains: search } },
         { nomorSbg: { contains: search } },
+        { vendor: { contains: search } },
         { namaPelanggan: { contains: search } },
         { nomorStruk: { contains: search } },
         { namaSales: { contains: search } },
@@ -934,6 +940,7 @@ const exportRiwayat = async (req, res, next) => {
         { jenisBarang: { contains: search } },
         { detailBarang: { contains: search } },
         { nomorSbg: { contains: search } },
+        { vendor: { contains: search } },
         { namaPelanggan: { contains: search } },
         { nomorStruk: { contains: search } },
         { namaSales: { contains: search } },
@@ -951,6 +958,7 @@ const exportRiwayat = async (req, res, next) => {
         No: idx + 1,
         'Tanggal Jual': new Date(item.tanggalJual || item.updatedAt).toLocaleDateString('id-ID'),
         'Tanggal Serah Terima': item.tanggalLelang ? new Date(item.tanggalLelang).toLocaleDateString('id-ID') : '',
+        Vendor: item.vendor || '',
         'No. Struk': item.nomorStruk || '',
         'Nomor SBG': item.nomorSbg,
         'Jenis Barang': item.jenisBarang,
