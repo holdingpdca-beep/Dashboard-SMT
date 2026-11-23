@@ -102,9 +102,12 @@ async function simpanGambar(file, folder = 'katalog') {
     } catch (e) {
       // Bila bucket mengaktifkan "Block Public Access", set ACL per-objek ditolak
       // ("Put public object acl is not allowed"). Upload ulang TANPA header ACL —
-      // objek akan mewarisi ACL bucket (pastikan bucket di-set Public Read di konsol OSS).
+      // objek akan mewarisi ACL bucket (idealnya bucket Private + Bucket Policy
+      // GetObject anonim utk prefix katalog/* & barang-art/* saja).
+      // L-10: HANYA tangani pesan "acl is not allowed". Error 403/AccessDenied lain
+      // (mis. kredensial salah) dibiarkan naik agar gejala aslinya tidak tertutup.
       const msg = String(e && (e.message || e.code) || '');
-      if (/acl is not allowed/i.test(msg) || e.code === 'AccessDenied' || e.status === 403) {
+      if (/acl is not allowed/i.test(msg)) {
         await ossClient.put(key, file.buffer, { mime: file.mimetype, headers: baseHeaders });
       } else {
         throw e;
