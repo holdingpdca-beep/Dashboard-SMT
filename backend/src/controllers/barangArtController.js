@@ -1,15 +1,85 @@
 const prisma = require('../utils/prisma');
 const { createAuditLog } = require('../utils/audit');
 const { toInt } = require('../utils/query');
+const { simpanGambar, hapusGambar: hapusFileGambar } = require('../utils/storage');
 const XLSX = require('xlsx');
 
 const MAX_IMPORT_ROWS = 2000; // Batas baris import Excel sekali proses (L-02)
 
 const KATEGORI_VALID = ['LOGAM_MULIA', 'PERHIASAN'];
 const KATEGORI_LABEL = { LOGAM_MULIA: 'Logam Mulia', PERHIASAN: 'Perhiasan' };
+const TAHAP_VALID = ['AKTIF', 'EKSPORT', 'TERJUAL', 'DILEBUR'];
+const TAHAP_LABEL = { AKTIF: 'Aktif', EKSPORT: 'Eksport', TERJUAL: 'Terjual', DILEBUR: 'Dilebur' };
 
-// Parsing tanggal deterministik (disimpan jam 12:00 UTC agar tidak bergeser
-// hari di zona waktu manapun). Input utama dari <input type="date"> = yyyy-mm-dd.
+// ── Pemetaan Vendor → prefix Kode Barang ──
+// Gadai Mas → LMN, Gadai Mulia → LMS. Cek "mulia" dulu agar tidak tertangkap "mas".
+const VENDOR_PREFIX = [
+  { match: /mulia/i, prefix: 'LMS' }, // Gadai Mulia
+  { match: /mas/i, prefix: 'LMN' },   // Gadai Mas
+];
+const VENDOR_OPTIONS = [
+  { value: 'Gadai Mas', prefix: 'LMN' },
+  { value: 'Gadai Mulia', prefix: 'LMS' },
+];
+function resolvePrefix(vendorAsal) {
+  const v = String(vendorAsal || '').trim();
+  if (!v) return null;
+  for (const r of VENDOR_PREFIX) if (r.match.test(v)) return r.prefix;
+  return null;
+}
+// Format kode: prefix + nomor berjalan (minimal 2 digit, tumbuh otomatis). Mis. LMN01, LMN02 ... LMN100
+function formatKode(prefix, num) {
+  const s = String(num);
+  return prefix + (s.length < 2 ? s.padStart(2, '0') : s);
+}
+
+// Nomor suffix tertinggi yang pernah ada di tabel untuk prefix (seed awal counter).
+async function maxSuffix(client, prefix) {
+  const rows = await client.barangArt.findMany({
+    where: { kodeBarang: { startsWith: prefix } },
+    select: { kodeBarang: true },
+  });
+  let max = 0;
+  for (const r of rows) {
+    const m = String(r.kodeBarang || '').slice(prefix.length).match(/^(\d+)/);
+    if (m) { const n = parseInt(m[1], 10); if (n > max) max = n; }
+  }
+  return max;
+}
+
+// Alokasikan `count` nomor berjalan untuk prefix secara ATOMIK via KodeCounter.
+// Mengembalikan nomor AWAL; kode yang dipakai = start .. start+count-1.
+// Counter hanya bertambah → nomor tak pernah dipakai ulang (walau barang terjual/pindah/dihapus).
+// `client` = prisma atau tx (dipanggil di dalam $transaction agar aman dari race).
+async function allocateKode(client, prefix, count = 1) {
+  let counter = await client.kodeCounter.findUnique({ where: { prefix } });
+  if (!counter) {
+    const seed = await maxSuffix(client, prefix); // mulai dari data lama bila ada
+    counter = await client.kodeCounter.create({ data: { prefix, lastNumber: seed } });
+  }
+  const start = counter.lastNumber + 1;
+  await client.kodeCounter.update({ where: { prefix }, data: { lastNumber: counter.lastNumber + count } });
+  return start;
+}
+
+// Parsing angka uang toleran format Excel: " 32,093,000.00 " → 32093000, " -   " → null(→0).
+function parseMoney(raw) {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') return isNaN(raw) ? null : raw;
+  let s = String(raw).trim();
+  if (s === '' || s === '-') return null;
+  s = s.replace(/[^\d.,-]/g, '').replace(/,/g, '');
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// Klasifikasi kategori dari karat: tepat 24 karat → Logam Mulia, selain itu → Perhiasan.
+function kategoriFromKarat(karat) {
+  const k = parseFloat(String(karat).replace(',', '.'));
+  return (!isNaN(k) && Math.round(k) === 24) ? 'LOGAM_MULIA' : 'PERHIASAN';
+}
+
+// Parsing tanggal deterministik (disimpan jam 12:00 UTC agar tidak bergeser hari).
 function parseTanggal(raw) {
   if (raw === null || raw === undefined || raw === '') return null;
   if (raw instanceof Date && !isNaN(raw.getTime())) {
@@ -17,45 +87,37 @@ function parseTanggal(raw) {
   }
   const s = String(raw).trim();
   const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) {
-    const [, y, mo, d] = iso;
-    return new Date(Date.UTC(+y, +mo - 1, +d, 12, 0, 0));
-  }
+  if (iso) { const [, y, mo, d] = iso; return new Date(Date.UTC(+y, +mo - 1, +d, 12, 0, 0)); }
   const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if (m) {
-    let [, d, mo, y] = m;
-    if (y.length === 2) y = '20' + y;
-    return new Date(Date.UTC(+y, +mo - 1, +d, 12, 0, 0));
-  }
+  if (m) { let [, d, mo, y] = m; if (y.length === 2) y = '20' + y; return new Date(Date.UTC(+y, +mo - 1, +d, 12, 0, 0)); }
   const parsed = new Date(s);
-  if (!isNaN(parsed.getTime())) {
-    return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 12, 0, 0));
-  }
+  if (!isNaN(parsed.getTime())) return new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 12, 0, 0));
   return null;
 }
 
-// Validasi & normalisasi kategori dari query/param. Mengembalikan null bila tidak valid.
 function normalizeKategori(raw) {
   const k = String(raw || '').trim().toUpperCase();
   return KATEGORI_VALID.includes(k) ? k : null;
 }
 
-const STATUS_VALID = ['BELUM_TERJUAL', 'TERJUAL'];
+// Susun filter WHERE dari query. tahap:'HISTORY' → TERJUAL+DILEBUR.
+const buildWhere = (query) => {
+  const where = {};
+  const kategori = normalizeKategori(query.kategori);
+  if (kategori) where.kategori = kategori;
 
-const buildWhere = (kategori, query) => {
-  const { search, status, tanpaKode } = query;
-  const where = { kategori };
-  // L-02: hanya terima nilai enum status yang valid (nilai asing → diabaikan, cegah 500)
-  if (status && STATUS_VALID.includes(status)) where.status = status;
-  // Barang yang Kode Barang-nya belum diisi (mis. hasil import)
-  if (tanpaKode === '1' || tanpaKode === 'true' || tanpaKode === true) where.kodeBarang = '';
+  const tahap = String(query.tahap || '').trim().toUpperCase();
+  if (tahap === 'HISTORY') where.tahap = { in: ['TERJUAL', 'DILEBUR'] };
+  else if (TAHAP_VALID.includes(tahap)) where.tahap = tahap;
+
+  const { search } = query;
   if (search) {
     where.OR = [
-      { barangAsal: { contains: search } },
       { nomorSbg: { contains: search } },
       { namaBarang: { contains: search } },
       { kodeBarang: { contains: search } },
       { provinsi: { contains: search } },
+      { vendorAsal: { contains: search } },
       { vendor: { contains: search } },
       { nomorSku: { contains: search } },
       { keterangan: { contains: search } },
@@ -66,32 +128,31 @@ const buildWhere = (kategori, query) => {
 
 const getItems = async (req, res, next) => {
   try {
-    const kategori = normalizeKategori(req.query.kategori);
-    if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
-
     const { sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
     const page = toInt(req.query.page, 1, 1, 1e9);
     const limit = toInt(req.query.limit, 20, 1, 100);
     const skip = (page - 1) * limit;
-    const where = buildWhere(kategori, req.query);
+    const where = buildWhere(req.query);
 
-    // Whitelist kolom sort agar aman (tidak langsung percaya input)
-    const SORTABLE = ['createdAt', 'barangAsal', 'nomorSbg', 'namaBarang', 'gramasi', 'karat', 'cogs', 'kodeBarang', 'provinsi', 'tanggalJual', 'nominalJual', 'vendor', 'nomorSku', 'status'];
+    const SORTABLE = ['createdAt', 'nomorSbg', 'namaBarang', 'gramasi', 'karat', 'cogs', 'totalHarga', 'beaLelang', 'kodeBarang', 'provinsi', 'tanggalJual', 'tanggalLebur', 'tanggalEksport', 'nominalJual', 'vendorAsal', 'vendor', 'nomorSku', 'kategori', 'tahap', 'status'];
     const orderCol = SORTABLE.includes(sortBy) ? sortBy : 'createdAt';
     const orderDir = sortOrder === 'asc' ? 'asc' : 'desc';
 
-    const [total, items, totalBelum, totalTerjual, totalPerluKode] = await Promise.all([
+    // Hitung ringkasan tahap dalam konteks kategori yang sama (bila ada).
+    const base = where.kategori ? { kategori: where.kategori } : {};
+    const [total, items, totalAktif, totalEksport, totalTerjual, totalDilebur] = await Promise.all([
       prisma.barangArt.count({ where }),
       prisma.barangArt.findMany({ where, skip, take: limit, orderBy: { [orderCol]: orderDir } }),
-      prisma.barangArt.count({ where: { kategori, status: 'BELUM_TERJUAL' } }),
-      prisma.barangArt.count({ where: { kategori, status: 'TERJUAL' } }),
-      prisma.barangArt.count({ where: { kategori, kodeBarang: '' } }),
+      prisma.barangArt.count({ where: { ...base, tahap: 'AKTIF' } }),
+      prisma.barangArt.count({ where: { ...base, tahap: 'EKSPORT' } }),
+      prisma.barangArt.count({ where: { ...base, tahap: 'TERJUAL' } }),
+      prisma.barangArt.count({ where: { ...base, tahap: 'DILEBUR' } }),
     ]);
 
     res.json({
       success: true,
       data: items,
-      summary: { totalBelum, totalTerjual, totalPerluKode },
+      summary: { totalAktif, totalEksport, totalTerjual, totalDilebur },
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
@@ -111,40 +172,59 @@ const getItemById = async (req, res, next) => {
 
 const createItem = async (req, res, next) => {
   try {
-    const kategori = normalizeKategori(req.body.kategori);
-    if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
+    const { vendorAsal, nomorSbg, provinsi, namaBarang, gramasi, karat, totalHarga, beaLelang, cogs, keterangan } = req.body;
 
-    const { barangAsal, nomorSbg, provinsi, namaBarang, gramasi, karat, cogs, kodeBarang, keterangan } = req.body;
-
-    if (!barangAsal || !nomorSbg || !provinsi || !namaBarang || gramasi === undefined || gramasi === '' || !karat || cogs === undefined || cogs === '' || !kodeBarang) {
+    if (!vendorAsal || !nomorSbg || !provinsi || !namaBarang || gramasi === undefined || gramasi === '' || !karat) {
       return res.status(400).json({ success: false, message: 'Field wajib tidak lengkap' });
     }
 
-    // Satu No SBG boleh dipakai banyak barang → tidak ada pengecekan duplikat.
-    // Barang baru selalu berstatus BELUM_TERJUAL. Data penjualan diisi lewat aksi tandai terjual.
-    const item = await prisma.barangArt.create({
-      data: {
-        kategori,
-        barangAsal: String(barangAsal).trim(),
-        nomorSbg: String(nomorSbg).trim(),
-        provinsi: String(provinsi).trim(),
-        namaBarang: String(namaBarang).trim(),
-        gramasi: parseFloat(gramasi),
-        karat: String(karat).trim(),
-        cogs: parseFloat(cogs),
-        kodeBarang: String(kodeBarang).trim(),
-        keterangan: keterangan || null,
-        status: 'BELUM_TERJUAL',
-      },
+    // Kategori otomatis dari karat (24 = Logam Mulia, selain itu Perhiasan). Bisa dipaksa via body.kategori.
+    const kategori = normalizeKategori(req.body.kategori) || kategoriFromKarat(karat);
+
+    // Hanya Logam Mulia yang berkode (LMN/LMS dari vendor). Perhiasan TIDAK berkode.
+    let prefix = null;
+    if (kategori === 'LOGAM_MULIA') {
+      prefix = resolvePrefix(vendorAsal);
+      if (!prefix) return res.status(400).json({ success: false, message: 'Vendor tidak dikenali. Gunakan "Gadai Mas" atau "Gadai Mulia".' });
+    }
+
+    // Payment SMT (COGS) = input langsung bila ada, selain itu Total Harga + Bea Lelang.
+    const th = parseMoney(totalHarga) ?? 0;
+    const bl = parseMoney(beaLelang) ?? 0;
+    const cogsVal = (cogs !== undefined && cogs !== '' && cogs !== null) ? parseMoney(cogs) : (th + bl);
+    if (cogsVal === null || isNaN(cogsVal)) return res.status(400).json({ success: false, message: 'Nilai COGS/Payment SMT tidak valid' });
+
+    // Alokasi kode + create atomik (hanya untuk Logam Mulia).
+    const item = await prisma.$transaction(async (tx) => {
+      let kodeBarang = null;
+      if (prefix) kodeBarang = formatKode(prefix, await allocateKode(tx, prefix, 1));
+      return tx.barangArt.create({
+        data: {
+          kategori,
+          vendorAsal: String(vendorAsal).trim(),
+          nomorSbg: String(nomorSbg).trim(),
+          provinsi: String(provinsi).trim(),
+          namaBarang: String(namaBarang).trim(),
+          gramasi: parseFloat(gramasi),
+          karat: String(karat).trim(),
+          totalHarga: th,
+          beaLelang: bl,
+          cogs: cogsVal,
+          kodeBarang,
+          keterangan: keterangan || null,
+          tahap: 'AKTIF',
+          status: 'BELUM_TERJUAL',
+        },
+      });
     });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `TAMBAH BARANG ART (${KATEGORI_LABEL[kategori]})`,
+      aktivitas: `TAMBAH BARANG ART (${KATEGORI_LABEL[kategori]}${item.kodeBarang ? ', ' + item.kodeBarang : ''})`,
       tabel: 'BarangArt', dataBaru: item, ipAddress: req.ip,
     });
 
-    res.status(201).json({ success: true, message: 'Data berhasil ditambahkan', data: item });
+    res.status(201).json({ success: true, message: item.kodeBarang ? `Data ditambahkan — Kode ${item.kodeBarang}` : 'Data perhiasan ditambahkan', data: item });
   } catch (err) {
     next(err);
   }
@@ -156,27 +236,35 @@ const updateItem = async (req, res, next) => {
     const existing = await prisma.barangArt.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
 
-    // kategori & status tidak diubah lewat endpoint ini (status via aksi jual/batal-jual)
-    const { barangAsal, nomorSbg, provinsi, namaBarang, gramasi, karat, cogs, kodeBarang, keterangan } = req.body;
+    const { vendorAsal, nomorSbg, provinsi, namaBarang, gramasi, karat, totalHarga, beaLelang, cogs, keterangan } = req.body;
 
+    // Hitung ulang COGS bila Total/Bea/COGS dikirim.
+    const th = totalHarga !== undefined && totalHarga !== '' ? parseMoney(totalHarga) : (existing.totalHarga != null ? parseFloat(existing.totalHarga) : null);
+    const bl = beaLelang !== undefined && beaLelang !== '' ? parseMoney(beaLelang) : (existing.beaLelang != null ? parseFloat(existing.beaLelang) : null);
+    let cogsVal = existing.cogs != null ? parseFloat(existing.cogs) : null;
+    if (cogs !== undefined && cogs !== '' && cogs !== null) cogsVal = parseMoney(cogs);
+    else if (totalHarga !== undefined || beaLelang !== undefined) cogsVal = (th || 0) + (bl || 0);
+
+    // Kode barang TIDAK diubah di edit (nomor berjalan tetap stabil).
     const updated = await prisma.barangArt.update({
       where: { id },
       data: {
-        barangAsal: barangAsal !== undefined && String(barangAsal).trim() !== '' ? String(barangAsal).trim() : existing.barangAsal,
+        vendorAsal: vendorAsal !== undefined && String(vendorAsal).trim() !== '' ? String(vendorAsal).trim() : existing.vendorAsal,
         nomorSbg: nomorSbg ? String(nomorSbg).trim() : existing.nomorSbg,
         provinsi: provinsi !== undefined ? String(provinsi).trim() : existing.provinsi,
         namaBarang: namaBarang !== undefined ? String(namaBarang).trim() : existing.namaBarang,
         gramasi: gramasi !== undefined && gramasi !== '' ? parseFloat(gramasi) : existing.gramasi,
         karat: karat !== undefined ? String(karat).trim() : existing.karat,
-        cogs: cogs !== undefined && cogs !== '' ? parseFloat(cogs) : existing.cogs,
-        kodeBarang: kodeBarang !== undefined ? String(kodeBarang).trim() : existing.kodeBarang,
+        totalHarga: th,
+        beaLelang: bl,
+        cogs: cogsVal != null ? cogsVal : existing.cogs,
         keterangan: keterangan !== undefined ? keterangan : existing.keterangan,
       },
     });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `EDIT BARANG ART (${KATEGORI_LABEL[existing.kategori]})`,
+      aktivitas: `EDIT BARANG ART (${KATEGORI_LABEL[existing.kategori]}, ${existing.kodeBarang})`,
       tabel: 'BarangArt', dataLama: existing, dataBaru: updated, ipAddress: req.ip,
     });
 
@@ -186,64 +274,55 @@ const updateItem = async (req, res, next) => {
   }
 };
 
-// Aksi: tandai TERJUAL untuk satu atau banyak barang sekaligus.
-// Vendor, Nomor SKU, dan Tanggal Jual dipakai sama untuk seluruh batch.
-// Nominal Jual diisi per barang (lihat `items`).
-// Body: { tanggalJual, vendor, nomorSku, items: [{ id, nominalJual }, ...] }
+// Ambil daftar barang AKTIF yang valid dari array id (dipakai aksi massal).
+async function ambilAktif(ids, { kategori } = {}) {
+  const items = await prisma.barangArt.findMany({ where: { id: { in: ids } } });
+  if (items.length !== ids.length) return { error: 'Sebagian barang tidak ditemukan' };
+  const bukanAktif = items.filter(i => i.tahap !== 'AKTIF');
+  if (bukanAktif.length > 0) return { error: `Barang berikut tidak berada di daftar aktif: ${bukanAktif.map(i => i.kodeBarang || i.nomorSbg).join(', ')}` };
+  if (kategori) {
+    const salah = items.filter(i => i.kategori !== kategori);
+    if (salah.length > 0) return { error: `Barang berikut bukan ${KATEGORI_LABEL[kategori]}: ${salah.map(i => i.kodeBarang || i.nomorSbg).join(', ')}` };
+  }
+  return { items };
+}
+
+function parseIds(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(x => parseInt(x)).filter(x => !isNaN(x));
+}
+
+// Aksi: tandai TERJUAL (Logam Mulia) untuk satu/banyak barang. → masuk History.
+// Body: { tanggalJual, vendor, nomorSku, keterangan, items: [{ id, nominalJual }] }
 const markSold = async (req, res, next) => {
   try {
     const { tanggalJual, vendor, nomorSku, keterangan, items } = req.body;
-
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, message: 'Minimal 1 barang harus dipilih' });
-    }
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ success: false, message: 'Minimal 1 barang harus dipilih' });
     const tglJual = parseTanggal(tanggalJual);
     if (!tglJual) return res.status(400).json({ success: false, message: 'Tanggal Jual wajib diisi' });
-    if (!vendor || !String(vendor).trim()) return res.status(400).json({ success: false, message: 'Vendor wajib diisi' });
+    if (!vendor || !String(vendor).trim()) return res.status(400).json({ success: false, message: 'Vendor pembeli wajib diisi' });
     if (!nomorSku || !String(nomorSku).trim()) return res.status(400).json({ success: false, message: 'Nomor SKU wajib diisi' });
 
-    // Normalisasi & validasi tiap baris
     const parsed = [];
     for (const it of items) {
       const id = parseInt(it.id);
       const nominal = it.nominalJual !== undefined && it.nominalJual !== '' ? parseFloat(it.nominalJual) : NaN;
-      if (!id || isNaN(nominal) || nominal < 0) {
-        return res.status(400).json({ success: false, message: 'Nominal Jual tiap barang wajib diisi dengan angka >= 0' });
-      }
+      if (!id || isNaN(nominal) || nominal < 0) return res.status(400).json({ success: false, message: 'Nominal Jual tiap barang wajib diisi dengan angka >= 0' });
       parsed.push({ id, nominal });
     }
 
-    const ids = parsed.map(p => p.id);
-    const existingItems = await prisma.barangArt.findMany({ where: { id: { in: ids } } });
-    if (existingItems.length !== ids.length) {
-      return res.status(404).json({ success: false, message: 'Sebagian barang tidak ditemukan' });
-    }
-
-    // L-02: cegah "jual ulang" barang yang sudah TERJUAL (data penjualan lama akan tertimpa).
-    const sudahTerjual = existingItems.filter(i => i.status !== 'BELUM_TERJUAL');
-    if (sudahTerjual.length > 0) {
-      const daftar = sudahTerjual.map(i => i.nomorSbg).join(', ');
-      return res.status(400).json({ success: false, message: `Barang berikut sudah terjual: ${daftar}. Batalkan status terjual dulu bila ingin mengubah.` });
-    }
-
-    // Barang tanpa Kode Barang tidak boleh dijual — Kode Barang wajib diisi dulu.
-    const tanpaKode = existingItems.filter(i => !i.kodeBarang || String(i.kodeBarang).trim() === '');
-    if (tanpaKode.length > 0) {
-      const daftar = tanpaKode.map(i => i.nomorSbg).join(', ');
-      return res.status(400).json({ success: false, message: `Kode Barang belum diisi untuk: ${daftar}. Isi Kode Barang dulu sebelum menjual.` });
-    }
+    const { items: existingItems, error } = await ambilAktif(parsed.map(p => p.id));
+    if (error) return res.status(400).json({ success: false, message: error });
 
     const vendorClean = String(vendor).trim();
     const skuClean = String(nomorSku).trim();
-    // Keterangan opsional & berlaku untuk seluruh batch. Hanya ditimpa bila diisi.
     const ketClean = keterangan !== undefined && String(keterangan).trim() !== '' ? String(keterangan).trim() : null;
 
-    // Semua update dalam satu transaksi (gagal salah satu → batal semua)
     const updated = await prisma.$transaction(
       parsed.map(p => prisma.barangArt.update({
         where: { id: p.id },
         data: {
-          status: 'TERJUAL', tanggalJual: tglJual, nominalJual: p.nominal, vendor: vendorClean, nomorSku: skuClean,
+          tahap: 'TERJUAL', status: 'TERJUAL', tanggalJual: tglJual, nominalJual: p.nominal, vendor: vendorClean, nomorSku: skuClean,
           ...(ketClean !== null ? { keterangan: ketClean } : {}),
         },
       }))
@@ -252,7 +331,7 @@ const markSold = async (req, res, next) => {
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
       aktivitas: `TANDAI TERJUAL BARANG ART (${updated.length} barang, SKU ${skuClean})`,
-      tabel: 'BarangArt', dataBaru: { ids, vendor: vendorClean, nomorSku: skuClean, tanggalJual: tglJual }, ipAddress: req.ip,
+      tabel: 'BarangArt', dataBaru: { ids: parsed.map(p => p.id), vendor: vendorClean, nomorSku: skuClean, tanggalJual: tglJual }, ipAddress: req.ip,
     });
 
     res.json({ success: true, message: `${updated.length} barang ditandai terjual`, data: updated });
@@ -261,25 +340,200 @@ const markSold = async (req, res, next) => {
   }
 };
 
-// Aksi: batalkan status terjual → kembali BELUM_TERJUAL (kosongkan tanggal & nominal)
-const revertSold = async (req, res, next) => {
+// Aksi: LEBUR perhiasan (satu/banyak) → jadi 1 Cukim, barang masuk History sebagai DILEBUR.
+// Body: { tanggalLebur, keterangan, berat, kadarXrf, ids: [...] }
+// Cukim: No CKM## otomatis, Berat & Kadar XRF manual, COGS = total Payment SMT barang yang dilebur.
+const leburItems = async (req, res, next) => {
   try {
-    const id = parseInt(req.params.id);
-    const existing = await prisma.barangArt.findUnique({ where: { id } });
-    if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
+    const ids = parseIds(req.body.ids);
+    if (ids.length === 0) return res.status(400).json({ success: false, message: 'Minimal 1 barang harus dipilih' });
+    const tglLebur = parseTanggal(req.body.tanggalLebur) || new Date();
+    const ketClean = req.body.keterangan !== undefined && String(req.body.keterangan).trim() !== '' ? String(req.body.keterangan).trim() : null;
 
-    const updated = await prisma.barangArt.update({
-      where: { id },
-      data: { status: 'BELUM_TERJUAL', tanggalJual: null, nominalJual: null, vendor: null, nomorSku: null },
+    // Validasi data Cukim (berat & kadar XRF wajib).
+    const berat = parseFloat(String(req.body.berat).replace(',', '.'));
+    if (isNaN(berat) || berat <= 0) return res.status(400).json({ success: false, message: 'Berat Cukim wajib diisi dengan angka > 0' });
+    const kadarXrf = String(req.body.kadarXrf || '').trim();
+    if (!kadarXrf) return res.status(400).json({ success: false, message: 'Kadar XRF wajib diisi' });
+
+    const { items, error } = await ambilAktif(ids);
+    if (error) return res.status(400).json({ success: false, message: error });
+
+    // COGS cukim = total Payment SMT (cogs) seluruh barang yang dilebur.
+    const totalCogs = items.reduce((s, i) => s + (i.cogs != null ? parseFloat(i.cogs) : 0), 0);
+
+    const { cukim, updatedCount } = await prisma.$transaction(async (tx) => {
+      const noCukim = formatKode('CKM', await allocateKode(tx, 'CKM', 1));
+      const cukim = await tx.cukim.create({
+        data: { noCukim, berat, kadarXrf, cogs: totalCogs, tanggal: tglLebur, keterangan: ketClean },
+      });
+      let updatedCount = 0;
+      for (const i of items) {
+        await tx.barangArt.update({
+          where: { id: i.id },
+          data: { tahap: 'DILEBUR', tanggalLebur: tglLebur, cukimId: cukim.id, ...(ketClean !== null ? { keterangan: ketClean } : {}) },
+        });
+        updatedCount++;
+      }
+      return { cukim, updatedCount };
     });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `BATALKAN TERJUAL BARANG ART (${KATEGORI_LABEL[existing.kategori]})`,
+      aktivitas: `LEBUR BARANG ART (${updatedCount} barang → Cukim ${cukim.noCukim})`,
+      tabel: 'BarangArt', dataBaru: { ids, tanggalLebur: tglLebur, cukim }, ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: `${updatedCount} barang dilebur menjadi Cukim ${cukim.noCukim}`, data: { cukim, updatedCount } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Aksi: pindah Logam Mulia → Perhiasan (satu/banyak). Kode Barang tetap.
+// Body: { ids: [...] }
+const moveToPerhiasan = async (req, res, next) => {
+  try {
+    const ids = parseIds(req.body.ids);
+    if (ids.length === 0) return res.status(400).json({ success: false, message: 'Minimal 1 barang harus dipilih' });
+
+    const { items, error } = await ambilAktif(ids, { kategori: 'LOGAM_MULIA' });
+    if (error) return res.status(400).json({ success: false, message: error });
+
+    // Jadi perhiasan → tidak berkode lagi (kode LMN/LMS dilepas; nomornya tak dipakai ulang).
+    const updated = await prisma.$transaction(
+      items.map(i => prisma.barangArt.update({ where: { id: i.id }, data: { kategori: 'PERHIASAN', kodeBarang: null } }))
+    );
+
+    await createAuditLog({
+      userId: req.user.id, namaUser: req.user.nama,
+      aktivitas: `PINDAH KE PERHIASAN (${updated.length} barang)`,
+      tabel: 'BarangArt', dataBaru: { ids }, ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: `${updated.length} barang dipindah ke Perhiasan`, data: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Aksi: pindah Perhiasan → Barang Eksport (satu/banyak).
+// Body: { ids: [...], tanggalEksport? }
+const moveToEksport = async (req, res, next) => {
+  try {
+    const ids = parseIds(req.body.ids);
+    if (ids.length === 0) return res.status(400).json({ success: false, message: 'Minimal 1 barang harus dipilih' });
+    const tgl = parseTanggal(req.body.tanggalEksport) || new Date();
+
+    const { items, error } = await ambilAktif(ids, { kategori: 'PERHIASAN' });
+    if (error) return res.status(400).json({ success: false, message: error });
+
+    // Saat masuk Barang Eksport, kode EKS## dibuat otomatis (nomor berjalan).
+    const updated = await prisma.$transaction(async (tx) => {
+      const start = await allocateKode(tx, 'EKS', items.length);
+      const out = [];
+      for (let idx = 0; idx < items.length; idx++) {
+        out.push(await tx.barangArt.update({
+          where: { id: items[idx].id },
+          data: { tahap: 'EKSPORT', tanggalEksport: tgl, kodeBarang: formatKode('EKS', start + idx) },
+        }));
+      }
+      return out;
+    });
+
+    await createAuditLog({
+      userId: req.user.id, namaUser: req.user.nama,
+      aktivitas: `PINDAH KE BARANG EKSPORT (${updated.length} barang)`,
+      tabel: 'BarangArt', dataBaru: { ids }, ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: `${updated.length} barang dipindah ke Barang Eksport`, data: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Aksi: kembalikan barang ke AKTIF (batal jual / batal lebur / batal eksport). Mengosongkan field terkait.
+const revertToAktif = async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.barangArt.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
+    if (existing.tahap === 'AKTIF') return res.status(400).json({ success: false, message: 'Barang sudah aktif' });
+
+    const updated = await prisma.barangArt.update({
+      where: { id },
+      data: {
+        tahap: 'AKTIF', status: 'BELUM_TERJUAL',
+        tanggalJual: null, nominalJual: null, vendor: null, nomorSku: null,
+        tanggalLebur: null, tanggalEksport: null,
+        // Batal lebur → lepas tautan ke Cukim (barang keluar dari gabungan cukim).
+        ...(existing.tahap === 'DILEBUR' ? { cukimId: null } : {}),
+        // Dari Barang Eksport → kembali jadi perhiasan tanpa kode (kode EKS dilepas).
+        ...(existing.tahap === 'EKSPORT' ? { kodeBarang: null } : {}),
+      },
+    });
+
+    await createAuditLog({
+      userId: req.user.id, namaUser: req.user.nama,
+      aktivitas: `KEMBALIKAN KE AKTIF dari ${TAHAP_LABEL[existing.tahap]} (${existing.kodeBarang})`,
       tabel: 'BarangArt', dataLama: existing, dataBaru: updated, ipAddress: req.ip,
     });
 
-    res.json({ success: true, message: 'Status terjual dibatalkan', data: updated });
+    res.json({ success: true, message: 'Barang dikembalikan ke daftar aktif', data: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Upload / ganti foto barang. Simpan gambar baru DULU, baru hapus yang lama bila sukses.
+const uploadGambar = async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.barangArt.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
+    if (!req.file) return res.status(400).json({ success: false, message: 'File gambar tidak ditemukan' });
+
+    let gambarBaru;
+    try {
+      gambarBaru = await simpanGambar(req.file, 'barang-art');
+    } catch (e) {
+      return res.status(400).json({ success: false, message: e.message || 'Gambar tidak valid' });
+    }
+    // Hapus foto lama hanya setelah yang baru tersimpan sukses.
+    if (existing.gambar) await hapusFileGambar(existing.gambar);
+
+    const updated = await prisma.barangArt.update({ where: { id }, data: { gambar: gambarBaru } });
+
+    await createAuditLog({
+      userId: req.user.id, namaUser: req.user.nama,
+      aktivitas: `UPLOAD FOTO BARANG ART (${existing.kodeBarang || existing.nomorSbg})`,
+      tabel: 'BarangArt', ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: 'Foto berhasil diunggah', data: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Hapus foto barang.
+const hapusGambarItem = async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.barangArt.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
+    if (existing.gambar) await hapusFileGambar(existing.gambar);
+
+    const updated = await prisma.barangArt.update({ where: { id }, data: { gambar: null } });
+
+    await createAuditLog({
+      userId: req.user.id, namaUser: req.user.nama,
+      aktivitas: `HAPUS FOTO BARANG ART (${existing.kodeBarang || existing.nomorSbg})`,
+      tabel: 'BarangArt', ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: 'Foto berhasil dihapus', data: updated });
   } catch (err) {
     next(err);
   }
@@ -291,11 +545,14 @@ const deleteItem = async (req, res, next) => {
     const existing = await prisma.barangArt.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
 
+    // Hapus foto terkait (bila ada) agar tidak jadi file yatim.
+    if (existing.gambar) await hapusFileGambar(existing.gambar);
+
     await prisma.barangArt.delete({ where: { id } });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `HAPUS BARANG ART (${KATEGORI_LABEL[existing.kategori]})`,
+      aktivitas: `HAPUS BARANG ART (${KATEGORI_LABEL[existing.kategori]}, ${existing.kodeBarang})`,
       tabel: 'BarangArt', dataLama: existing, ipAddress: req.ip,
     });
 
@@ -307,50 +564,52 @@ const deleteItem = async (req, res, next) => {
 
 const exportExcel = async (req, res, next) => {
   try {
-    const kategori = normalizeKategori(req.query.kategori);
-    if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
-
-    const where = buildWhere(kategori, req.query);
+    const where = buildWhere(req.query);
     const items = await prisma.barangArt.findMany({ where, orderBy: { createdAt: 'desc' } });
 
     const data = items.map((item, idx) => ({
       No: idx + 1,
-      'Barang Asal': item.barangAsal,
-      'No SBG': item.nomorSbg,
-      Provinsi: item.provinsi,
-      'Nama Barang': item.namaBarang,
-      Gramasi: parseFloat(item.gramasi),
-      Karat: item.karat,
-      COGS: item.cogs != null ? parseFloat(item.cogs) : '',
       'Kode Barang': item.kodeBarang,
+      Provinsi: item.provinsi,
+      Vendor: item.vendorAsal || '',
+      'No SBG': item.nomorSbg,
+      Keterangan: item.keterangan || '',
+      Barang: item.namaBarang,
+      Berat: parseFloat(item.gramasi),
+      Karat: item.karat,
+      'Total Harga': item.totalHarga != null ? parseFloat(item.totalHarga) : '',
+      'Bea Lelang': item.beaLelang != null ? parseFloat(item.beaLelang) : '',
+      'Payment SMT': item.cogs != null ? parseFloat(item.cogs) : '',
+      Kategori: KATEGORI_LABEL[item.kategori],
+      Tahap: TAHAP_LABEL[item.tahap],
       'Tanggal Jual': item.tanggalJual ? new Date(item.tanggalJual).toLocaleDateString('id-ID') : '',
       'Nominal Jual': item.nominalJual != null ? parseFloat(item.nominalJual) : '',
-      Vendor: item.vendor || '',
+      'Vendor Pembeli': item.vendor || '',
       'Nomor SKU': item.nomorSku || '',
-      Keterangan: item.keterangan || '',
-      Status: item.status === 'TERJUAL' ? 'Terjual' : 'Belum Terjual',
+      'Tanggal Lebur': item.tanggalLebur ? new Date(item.tanggalLebur).toLocaleDateString('id-ID') : '',
+      'Tanggal Eksport': item.tanggalEksport ? new Date(item.tanggalEksport).toLocaleDateString('id-ID') : '',
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, KATEGORI_LABEL[kategori]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Barang ART');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `EXPORT BARANG ART ${KATEGORI_LABEL[kategori]} (${items.length} data)`,
+      aktivitas: `EXPORT BARANG ART (${items.length} data)`,
       tabel: 'BarangArt', ipAddress: req.ip,
     });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="Barang-ART-${KATEGORI_LABEL[kategori].replace(/\s+/g, '-')}-${Date.now()}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="Barang-ART-${Date.now()}.xlsx"`);
     res.send(buf);
   } catch (err) {
     next(err);
   }
 };
 
-// Ambil nilai kolom berdasarkan nama header (toleran spasi & huruf besar/kecil)
+// Ambil nilai kolom berdasarkan nama header (toleran spasi & huruf besar/kecil).
 function pickCol(row, aliases) {
   const keys = Object.keys(row);
   for (const alias of aliases) {
@@ -364,14 +623,12 @@ function pickCol(row, aliases) {
   return '';
 }
 
-// Import dari Excel sesuai template: Barang Asal, No SBG, Provinsi, Nama Barang, Gramasi, Karat, COGS, Kode Barang.
-// Kolom Kode Barang opsional: bila di Excel sudah terisi langsung dipakai (barang siap dijual);
-// bila kosong, barang tetap masuk tapi Kode Barang wajib diisi manual dulu sebelum bisa dijual.
-// Semua baris masuk sebagai BELUM_TERJUAL.
+// Import dari Excel format ART baru:
+// Kolom: Kode Barang (diabaikan, dibuat otomatis) · Provinsi · Vendor · No SBG · Keterangan · Barang · Berat · Karat · Total Harga · Bea Lelang · Payment SMT
+// Kategori otomatis dari Karat (24 → Logam Mulia, selain itu Perhiasan).
+// Kode Barang otomatis dari Vendor (Gadai Mas → LMN, Gadai Mulia → LMS), nomor berjalan.
 const importExcel = async (req, res, next) => {
   try {
-    const kategori = normalizeKategori(req.body.kategori);
-    if (!kategori) return res.status(400).json({ success: false, message: 'Kategori tidak valid' });
     if (!req.file) return res.status(400).json({ success: false, message: 'File Excel tidak ditemukan' });
 
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
@@ -382,69 +639,96 @@ const importExcel = async (req, res, next) => {
       return res.status(400).json({ success: false, message: `Jumlah baris (${rows.length}) melebihi batas ${MAX_IMPORT_ROWS}. Bagi file menjadi beberapa bagian.` });
     }
 
-    const toCreate = [];
-    let gagal = 0;
-    let perluKode = 0; // baris berhasil diimport tapi Kode Barang masih kosong (harus diisi sebelum dijual)
+    const toCreate = []; // tiap item punya _prefix (LMN/LMS) utk Logam Mulia, null utk Perhiasan
+    let gagal = 0, logamMulia = 0, perhiasan = 0;
     const errors = [];
 
     rows.forEach((row, i) => {
-      const barangAsal = String(pickCol(row, ['Barang Asal'])).trim();
+      const vendorAsal = String(pickCol(row, ['Vendor'])).trim();
       const nomorSbg = String(pickCol(row, ['No SBG', 'Nomor SBG', 'SBG'])).trim();
       const provinsi = String(pickCol(row, ['Provinsi'])).trim();
-      const namaBarang = String(pickCol(row, ['Nama Barang'])).trim();
-      const gramasiRaw = pickCol(row, ['Gramasi']);
+      const keterangan = String(pickCol(row, ['Keterangan'])).trim();
+      const namaBarang = String(pickCol(row, ['Barang', 'Nama Barang'])).trim();
+      const gramasiRaw = pickCol(row, ['Berat', 'Gramasi']);
       const karat = String(pickCol(row, ['Karat'])).trim();
-      const cogsRaw = pickCol(row, ['COGS', 'Cogs']);
-      const kodeBarang = String(pickCol(row, ['Kode Barang', 'Kode'])).trim();
+      const totalHarga = parseMoney(pickCol(row, ['Total Harga', 'Total']));
+      const beaLelang = parseMoney(pickCol(row, ['Bea Lelang', 'Bea']));
+      const paymentRaw = pickCol(row, ['Payment SMT', 'Payment', 'COGS']);
 
-      // Lewati baris kosong total
-      if (!barangAsal && !nomorSbg && !provinsi && !namaBarang && gramasiRaw === '' && !karat && cogsRaw === '' && !kodeBarang) return;
+      // Lewati baris kosong total.
+      if (!vendorAsal && !nomorSbg && !provinsi && !namaBarang && gramasiRaw === '' && !karat) return;
 
-      const gramasi = parseFloat(gramasiRaw);
-      const cogs = parseFloat(cogsRaw);
+      const gramasi = parseFloat(String(gramasiRaw).toString().replace(',', '.'));
+      let cogs = parseMoney(paymentRaw);
+      if (cogs === null) cogs = (totalHarga || 0) + (beaLelang || 0);
 
-      if (!barangAsal || !nomorSbg || !provinsi || !namaBarang || !karat || isNaN(gramasi) || isNaN(cogs)) {
+      if (!vendorAsal || !nomorSbg || !provinsi || !namaBarang || !karat || isNaN(gramasi) || !cogs) {
         gagal++;
         errors.push({ baris: i + 2, nomorSbg, pesan: 'Data tidak lengkap / angka tidak valid' });
         return;
       }
 
-      if (!kodeBarang) perluKode++;
+      const kategori = kategoriFromKarat(karat);
+
+      // Logam Mulia WAJIB vendor dikenali (utk kode LMN/LMS). Perhiasan tidak berkode.
+      let prefix = null;
+      if (kategori === 'LOGAM_MULIA') {
+        prefix = resolvePrefix(vendorAsal);
+        if (!prefix) {
+          gagal++;
+          errors.push({ baris: i + 2, nomorSbg, pesan: `Vendor "${vendorAsal}" tidak dikenali untuk Logam Mulia (hanya Gadai Mas / Gadai Mulia)` });
+          return;
+        }
+        logamMulia++;
+      } else {
+        perhiasan++;
+      }
 
       toCreate.push({
-        kategori,
-        barangAsal,
-        nomorSbg,
-        provinsi,
-        namaBarang,
-        gramasi,
-        karat,
-        cogs,
-        kodeBarang, // dari Excel bila ada; '' bila kosong → diisi manual sebelum bisa dijual
-        status: 'BELUM_TERJUAL',
+        _prefix: prefix,
+        kategori, vendorAsal, nomorSbg, provinsi, keterangan: keterangan || null, namaBarang,
+        gramasi, karat, totalHarga: totalHarga || 0, beaLelang: beaLelang || 0, cogs,
+        kodeBarang: null, tahap: 'AKTIF', status: 'BELUM_TERJUAL',
       });
     });
 
     let berhasil = 0;
     if (toCreate.length > 0) {
-      const result = await prisma.barangArt.createMany({ data: toCreate });
-      berhasil = result.count;
+      berhasil = await prisma.$transaction(async (tx) => {
+        // Alokasi blok nomor untuk tiap prefix LM, lalu bagikan berurutan.
+        const countLMN = toCreate.filter(r => r._prefix === 'LMN').length;
+        const countLMS = toCreate.filter(r => r._prefix === 'LMS').length;
+        let nLMN = countLMN > 0 ? await allocateKode(tx, 'LMN', countLMN) : 0;
+        let nLMS = countLMS > 0 ? await allocateKode(tx, 'LMS', countLMS) : 0;
+        for (const r of toCreate) {
+          if (r._prefix === 'LMN') r.kodeBarang = formatKode('LMN', nLMN++);
+          else if (r._prefix === 'LMS') r.kodeBarang = formatKode('LMS', nLMS++);
+          delete r._prefix;
+        }
+        const result = await tx.barangArt.createMany({ data: toCreate });
+        return result.count;
+      });
     }
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `IMPORT BARANG ART ${KATEGORI_LABEL[kategori]} (${berhasil} baru, ${perluKode} perlu kode, ${gagal} gagal)`,
+      aktivitas: `IMPORT BARANG ART (${berhasil} baru: ${logamMulia} logam mulia, ${perhiasan} perhiasan, ${gagal} gagal)`,
       tabel: 'BarangArt', ipAddress: req.ip,
     });
 
     res.json({
       success: true,
       message: 'Import selesai',
-      data: { total: rows.length, berhasil, perluKode, gagal, errors },
+      data: { total: rows.length, berhasil, logamMulia, perhiasan, gagal, errors },
     });
   } catch (err) {
     next(err);
   }
 };
 
-module.exports = { getItems, getItemById, createItem, updateItem, markSold, revertSold, deleteItem, exportExcel, importExcel };
+module.exports = {
+  getItems, getItemById, createItem, updateItem,
+  markSold, leburItems, moveToPerhiasan, moveToEksport, revertToAktif,
+  deleteItem, exportExcel, importExcel,
+  uploadGambar, hapusGambarItem,
+};

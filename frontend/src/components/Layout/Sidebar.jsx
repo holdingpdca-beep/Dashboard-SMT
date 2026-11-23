@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Package, FileText, History, Users, ScrollText, LogOut, ChevronRight, ChevronDown, Gem, Boxes, Coins, Sparkles, Tv } from 'lucide-react'
+import { LayoutDashboard, Package, FileText, History, Users, ScrollText, LogOut, ChevronRight, ChevronDown, Gem, Boxes, Coins, Sparkles, Tv, Ship, Flame } from 'lucide-react'
 import { useAuth } from '../../contexts/AuthContext'
 
 // Menu level atas
@@ -17,6 +17,9 @@ const elektronikItems = [
 const barangArtItems = [
   { to: '/barang-art/logam-mulia', label: 'Logam Mulia', icon: Coins },
   { to: '/barang-art/perhiasan', label: 'Perhiasan', icon: Sparkles },
+  { to: '/barang-art/eksport', label: 'Barang Eksport', icon: Ship },
+  { to: '/barang-art/cukim', label: 'Cukim', icon: Flame },
+  { to: '/barang-art/history', label: 'History', icon: History },
 ]
 
 const adminItems = [

@@ -12,6 +12,9 @@ const GRADE_OPTIONS = ['A', 'B', 'C', 'D']
 // Pilihan jenis barang (bisa pilih dari daftar atau ketik sendiri untuk yang lain)
 const JENIS_BARANG_OPTIONS = ['TELEVISI', 'HANDPHONE', 'TABLET', 'KONSOL', 'KAMERA', 'SMART WATCH', 'LAPTOP', 'DRONE']
 
+// Pilihan vendor/asal barang (bisa pilih dari daftar atau ketik sendiri)
+const VENDOR_OPTIONS = ['GMN', 'GMS', 'EKSTERNAL']
+
 const PPN_RATE = 0.011 // 1,1%
 const emptyJual = { namaPelanggan: '', noTelepon: '', tanggal: new Date().toISOString().split('T')[0], namaSales: '', jenisPembeli: 'KARYAWAN_INTERNAL' }
 
@@ -35,7 +38,7 @@ function FormField({ label, children }) {
   )
 }
 
-const emptyForm = { nomorSbg: '', tanggalLelang: '', grade: 'A', jenisBarang: '', detailBarang: '', keterangan: '', cogs: '', perusahaan: 'SERBA_MAS' }
+const emptyForm = { nomorSbg: '', vendor: '', tanggalLelang: '', grade: 'A', jenisBarang: '', detailBarang: '', keterangan: '', cogs: '', perusahaan: 'SERBA_MAS' }
 
 export default function Elektronik() {
   const { canSeeCogs, canDelete, user } = useAuth()
@@ -56,7 +59,7 @@ export default function Elektronik() {
 
   const [showImport, setShowImport] = useState(false)
   const [importFile, setImportFile] = useState(null)
-  const [importMapping, setImportMapping] = useState({ nomorSbg: '', grade: '', jenisBarang: '', detailBarang: '', keterangan: '', cogs: '', hjMin: '', hjMax: '', hargaSmt: '', tanggalLelang: '' })
+  const [importMapping, setImportMapping] = useState({ nomorSbg: '', vendor: '', grade: '', jenisBarang: '', detailBarang: '', keterangan: '', cogs: '', hjMin: '', hjMax: '', hargaSmt: '', tanggalLelang: '' })
   const [importColumns, setImportColumns] = useState([])
   const [importLoading, setImportLoading] = useState(false)
   const [importResult, setImportResult] = useState(null)
@@ -183,6 +186,7 @@ export default function Elektronik() {
   const openEdit = (item) => {
     setForm({
       nomorSbg: item.nomorSbg,
+      vendor: item.vendor || '',
       tanggalLelang: item.tanggalLelang ? item.tanggalLelang.split('T')[0] : '',
       grade: item.grade, jenisBarang: item.jenisBarang,
       detailBarang: item.detailBarang, keterangan: item.keterangan || '',
@@ -374,6 +378,7 @@ export default function Elektronik() {
                 </th>
                 <th className="table-header w-12">No</th>
                 <SortTh col="tanggalLelang">Tanggal Serah Terima</SortTh>
+                <th className="table-header">Vendor</th>
                 <SortTh col="nomorSbg">Nomor SBG</SortTh>
                 <SortTh col="jenisBarang">Jenis Barang</SortTh>
                 <SortTh col="grade">Grade</SortTh>
@@ -388,11 +393,11 @@ export default function Elektronik() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={13} className="text-center py-12 text-brown-400">
+                <tr><td colSpan={14} className="text-center py-12 text-brown-400">
                   <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2" /> Memuat data...
                 </td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={13} className="text-center py-12 text-brown-400">
+                <tr><td colSpan={14} className="text-center py-12 text-brown-400">
                   Tidak ada data ditemukan
                 </td></tr>
               ) : items.map((item, idx) => (
@@ -407,6 +412,7 @@ export default function Elektronik() {
                   </td>
                   <td className="table-cell text-center text-brown-400">{(pagination.page - 1) * pagination.limit + idx + 1}</td>
                   <td className="table-cell whitespace-nowrap">{formatDate(item.tanggalLelang)}</td>
+                  <td className="table-cell">{item.vendor || '-'}</td>
                   <td className="table-cell font-mono font-medium text-brown-800 dark:text-gold-300">{item.nomorSbg}</td>
                   <td className="table-cell">{item.jenisBarang}</td>
                   <td className="table-cell">
@@ -488,6 +494,18 @@ export default function Elektronik() {
           <FormField label="Tanggal Serah Terima">
             <input type="date" value={form.tanggalLelang} onChange={e => handleFormChange('tanggalLelang', e.target.value)} className="input-field" />
           </FormField>
+          <FormField label="Vendor">
+            <input
+              list="vendor-list"
+              value={form.vendor}
+              onChange={e => handleFormChange('vendor', e.target.value.toUpperCase())}
+              className="input-field"
+              placeholder="Pilih atau ketik (GMN, GMS, EKSTERNAL)"
+            />
+            <datalist id="vendor-list">
+              {VENDOR_OPTIONS.map(v => <option key={v} value={v} />)}
+            </datalist>
+          </FormField>
           <FormField label="Jenis Barang *">
             <input
               list="jenis-barang-list"
@@ -546,6 +564,7 @@ export default function Elektronik() {
             {[
               ['Nomor SBG', viewItem.nomorSbg],
               ['Tanggal Serah Terima', formatDate(viewItem.tanggalLelang)],
+              ['Vendor', viewItem.vendor || '-'],
               ['Jenis Barang', viewItem.jenisBarang],
               ['Grade', viewItem.grade],
               ['Nama Barang', viewItem.detailBarang],
@@ -580,6 +599,7 @@ export default function Elektronik() {
                 {[
                   { key: 'nomorSbg', label: 'Nomor SBG *' },
                   { key: 'tanggalLelang', label: 'Tanggal Serah Terima' },
+                  { key: 'vendor', label: 'Vendor' },
                   { key: 'grade', label: 'Grade *' },
                   { key: 'jenisBarang', label: 'Jenis Barang *' },
                   { key: 'detailBarang', label: 'Nama Barang *' },

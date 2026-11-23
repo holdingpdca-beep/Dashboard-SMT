@@ -92,15 +92,24 @@ async function simpanGambar(file, folder = 'katalog') {
   const key = `${folder}/${filename}`;
 
   if (ossEnabled) {
-    await ossClient.put(key, file.buffer, {
-      mime: file.mimetype,
-      headers: {
-        'Cache-Control': 'public, max-age=31536000',
-        // Objek gambar dibuat publik agar bisa ditampilkan langsung di <img src>.
-        // Bucket boleh tetap privat; ACL ini hanya berlaku per objek.
-        'x-oss-object-acl': 'public-read',
-      },
-    });
+    const baseHeaders = { 'Cache-Control': 'public, max-age=31536000' };
+    try {
+      // Coba set objek publik per-objek agar bisa langsung tampil di <img src>.
+      await ossClient.put(key, file.buffer, {
+        mime: file.mimetype,
+        headers: { ...baseHeaders, 'x-oss-object-acl': 'public-read' },
+      });
+    } catch (e) {
+      // Bila bucket mengaktifkan "Block Public Access", set ACL per-objek ditolak
+      // ("Put public object acl is not allowed"). Upload ulang TANPA header ACL —
+      // objek akan mewarisi ACL bucket (pastikan bucket di-set Public Read di konsol OSS).
+      const msg = String(e && (e.message || e.code) || '');
+      if (/acl is not allowed/i.test(msg) || e.code === 'AccessDenied' || e.status === 403) {
+        await ossClient.put(key, file.buffer, { mime: file.mimetype, headers: baseHeaders });
+      } else {
+        throw e;
+      }
+    }
     return `${ossPublicBase}/${key}`;
   }
 
@@ -125,7 +134,7 @@ async function hapusGambar(gambar) {
     // dan tanpa komponen traversal ("..") — cegah penghapusan objek arbitrer.
     if (ossPublicBase && gambar.startsWith(ossPublicBase + '/')) {
       const key = gambar.slice(ossPublicBase.length + 1); // buang "base/"
-      if (ossClient && key && !key.includes('..') && /^katalog\//.test(key)) {
+      if (ossClient && key && !key.includes('..') && /^(katalog|barang-art)\//.test(key)) {
         await ossClient.delete(key);
       }
       return;

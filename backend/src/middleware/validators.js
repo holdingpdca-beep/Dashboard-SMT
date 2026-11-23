@@ -31,6 +31,7 @@ const createItemRules = [
   body('detailBarang').trim().notEmpty().withMessage('Detail barang wajib diisi'),
   body('cogs').exists().withMessage('COGS wajib diisi').bail().isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
   body('perusahaan').optional({ nullable: true, checkFalsy: true }).isIn(PERUSAHAAN).withMessage('Perusahaan tidak valid'),
+  body('vendor').optional({ nullable: true, checkFalsy: true }).isLength({ max: 100 }).withMessage('Vendor maksimal 100 karakter'),
 ];
 
 const updateItemRules = [
@@ -40,6 +41,7 @@ const updateItemRules = [
   body('detailBarang').optional().trim().notEmpty().withMessage('Detail barang tidak boleh kosong'),
   body('cogs').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
   body('perusahaan').optional({ nullable: true, checkFalsy: true }).isIn(PERUSAHAAN).withMessage('Perusahaan tidak valid'),
+  body('vendor').optional({ nullable: true, checkFalsy: true }).isLength({ max: 100 }).withMessage('Vendor maksimal 100 karakter'),
 ];
 
 // ── Penjualan langsung (struk) ──
@@ -140,39 +142,54 @@ const updateCabangRules = [
 // ── Barang ART (L-02) ──
 const KATEGORI_ART = ['LOGAM_MULIA', 'PERHIASAN'];
 
+// Kode Barang otomatis dari Vendor; kategori otomatis dari Karat. Keduanya tak lagi wajib dari klien.
 const createBarangArtRules = [
-  body('kategori').isIn(KATEGORI_ART).withMessage('Kategori harus LOGAM_MULIA atau PERHIASAN'),
-  body('barangAsal').trim().notEmpty().withMessage('Barang asal wajib diisi').bail().isLength({ max: 150 }).withMessage('Barang asal maksimal 150 karakter'),
+  body('kategori').optional().isIn(KATEGORI_ART).withMessage('Kategori harus LOGAM_MULIA atau PERHIASAN'),
+  body('vendorAsal').trim().notEmpty().withMessage('Vendor wajib dipilih').bail().isLength({ max: 150 }).withMessage('Vendor maksimal 150 karakter'),
   body('nomorSbg').trim().notEmpty().withMessage('Nomor SBG wajib diisi').bail().isLength({ max: 100 }).withMessage('Nomor SBG maksimal 100 karakter'),
   body('provinsi').trim().notEmpty().withMessage('Provinsi wajib diisi').bail().isLength({ max: 100 }).withMessage('Provinsi maksimal 100 karakter'),
   body('namaBarang').trim().notEmpty().withMessage('Nama barang wajib diisi').bail().isLength({ max: 200 }).withMessage('Nama barang maksimal 200 karakter'),
-  body('gramasi').exists().withMessage('Gramasi wajib diisi').bail().isFloat({ min: 0 }).withMessage('Gramasi harus angka >= 0'),
+  body('gramasi').exists().withMessage('Berat wajib diisi').bail().isFloat({ min: 0 }).withMessage('Berat harus angka >= 0'),
   body('karat').trim().notEmpty().withMessage('Karat wajib diisi').bail().isLength({ max: 50 }).withMessage('Karat maksimal 50 karakter'),
-  body('cogs').exists().withMessage('COGS wajib diisi').bail().isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
-  body('kodeBarang').trim().notEmpty().withMessage('Kode barang wajib diisi').bail().isLength({ max: 100 }).withMessage('Kode barang maksimal 100 karakter'),
+  body('totalHarga').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Total Harga harus angka >= 0'),
+  body('beaLelang').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Bea Lelang harus angka >= 0'),
+  body('cogs').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Payment SMT harus angka >= 0'),
   body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
 ];
 
 const updateBarangArtRules = [
-  body('barangAsal').optional().trim().notEmpty().withMessage('Barang asal tidak boleh kosong').bail().isLength({ max: 150 }).withMessage('Barang asal maksimal 150 karakter'),
+  body('vendorAsal').optional().trim().isLength({ max: 150 }).withMessage('Vendor maksimal 150 karakter'),
   body('nomorSbg').optional().trim().notEmpty().withMessage('Nomor SBG tidak boleh kosong').bail().isLength({ max: 100 }).withMessage('Nomor SBG maksimal 100 karakter'),
   body('provinsi').optional().trim().notEmpty().withMessage('Provinsi tidak boleh kosong').bail().isLength({ max: 100 }).withMessage('Provinsi maksimal 100 karakter'),
   body('namaBarang').optional().trim().notEmpty().withMessage('Nama barang tidak boleh kosong').bail().isLength({ max: 200 }).withMessage('Nama barang maksimal 200 karakter'),
-  body('gramasi').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Gramasi harus angka >= 0'),
+  body('gramasi').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Berat harus angka >= 0'),
   body('karat').optional().trim().notEmpty().withMessage('Karat tidak boleh kosong').bail().isLength({ max: 50 }).withMessage('Karat maksimal 50 karakter'),
-  body('cogs').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('COGS harus angka >= 0'),
-  body('kodeBarang').optional().trim().isLength({ max: 100 }).withMessage('Kode barang maksimal 100 karakter'),
+  body('totalHarga').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Total Harga harus angka >= 0'),
+  body('beaLelang').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Bea Lelang harus angka >= 0'),
+  body('cogs').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('Payment SMT harus angka >= 0'),
   body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
 ];
 
 const markSoldRules = [
   body('tanggalJual').notEmpty().withMessage('Tanggal jual wajib diisi'),
-  body('vendor').trim().notEmpty().withMessage('Vendor wajib diisi').bail().isLength({ max: 150 }).withMessage('Vendor maksimal 150 karakter'),
+  body('vendor').trim().notEmpty().withMessage('Vendor pembeli wajib diisi').bail().isLength({ max: 150 }).withMessage('Vendor maksimal 150 karakter'),
   body('nomorSku').trim().notEmpty().withMessage('Nomor SKU wajib diisi').bail().isLength({ max: 100 }).withMessage('Nomor SKU maksimal 100 karakter'),
   body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
   body('items').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 barang harus dipilih (maks 500)'),
   body('items.*.id').isInt().withMessage('ID barang tidak valid'),
   body('items.*.nominalJual').isFloat({ min: 0 }).withMessage('Nominal jual harus angka >= 0'),
+];
+
+const leburRules = [
+  body('tanggalLebur').optional({ nullable: true, checkFalsy: true }),
+  body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
+  body('ids').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 barang harus dipilih (maks 500)'),
+  body('ids.*').isInt().withMessage('ID barang tidak valid'),
+];
+
+const moveArtRules = [
+  body('ids').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 barang harus dipilih (maks 500)'),
+  body('ids.*').isInt().withMessage('ID barang tidak valid'),
 ];
 
 module.exports = {
@@ -195,4 +212,6 @@ module.exports = {
   createBarangArtRules,
   updateBarangArtRules,
   markSoldRules,
+  leburRules,
+  moveArtRules,
 };

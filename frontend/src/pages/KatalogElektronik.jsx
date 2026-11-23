@@ -2,13 +2,20 @@ import { useState, useEffect, useCallback } from 'react'
 import api from '../utils/api'
 import { formatRupiah, GRADE_COLORS } from '../utils/format'
 import { Search, RefreshCw, ChevronLeft, ChevronRight, Monitor, PackageSearch } from 'lucide-react'
+import Modal from '../components/UI/Modal'
 
 const GRADE_TABS = ['', 'A', 'B', 'C', 'D']
 const PER_PAGE = 24
 
-function KartuBarang({ item }) {
+function KartuBarang({ item, onClick }) {
   return (
-    <div className="card p-0 overflow-hidden flex flex-col transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } }}
+      className="card p-0 overflow-hidden flex flex-col cursor-pointer transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 hover:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-400"
+    >
       <div className="p-4 flex flex-col flex-1">
         {/* Grade + jenis */}
         <div className="flex items-center justify-between gap-2 mb-2">
@@ -39,6 +46,7 @@ function KartuBarang({ item }) {
             {formatRupiah(item.hargaSmt)}
           </p>
           <p className="text-[11px] text-brown-400 dark:text-brown-500 mt-0.5">Belum termasuk PPN 1,1%</p>
+          <p className="text-[11px] font-medium text-gold-600 dark:text-gold-400 mt-2">Ketuk untuk lihat detail →</p>
         </div>
       </div>
     </div>
@@ -53,6 +61,7 @@ export default function KatalogElektronik() {
   const [kategori, setKategori] = useState('')
   const [kategoriList, setKategoriList] = useState([])
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: PER_PAGE, totalPages: 1 })
+  const [detail, setDetail] = useState(null)
 
   const fetchData = useCallback(async (page = 1, q = search, g = grade, k = kategori) => {
     setLoading(true)
@@ -176,7 +185,7 @@ export default function KatalogElektronik() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {items.map(item => <KartuBarang key={item.id} item={item} />)}
+            {items.map(item => <KartuBarang key={item.id} item={item} onClick={() => setDetail(item)} />)}
           </div>
         )}
 
@@ -213,6 +222,48 @@ export default function KatalogElektronik() {
           </p>
         </div>
       </main>
+
+      {/* ── Modal Detail Barang ── */}
+      <Modal isOpen={!!detail} onClose={() => setDetail(null)} title="Detail Barang" size="md">
+        {detail && (
+          <div className="space-y-4">
+            {/* Grade + jenis */}
+            <div className="flex items-center justify-between gap-2">
+              <span className={GRADE_COLORS[detail.grade] || 'badge-gray'}>Grade {detail.grade}</span>
+              {detail.jenisBarang && (
+                <span className="text-xs uppercase tracking-wide text-brown-400 dark:text-brown-500 font-medium">
+                  {detail.jenisBarang}
+                </span>
+              )}
+            </div>
+
+            {/* Nama barang lengkap */}
+            <div>
+              <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold mb-1">Nama Barang</p>
+              <p className="font-semibold text-brown-800 dark:text-gold-100 leading-snug text-lg break-words whitespace-pre-wrap">
+                {detail.nama}
+              </p>
+            </div>
+
+            {/* Keterangan lengkap */}
+            <div>
+              <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold mb-1">Keterangan</p>
+              <p className="text-sm text-brown-600 dark:text-brown-300 leading-relaxed break-words whitespace-pre-wrap">
+                {detail.keterangan || '-'}
+              </p>
+            </div>
+
+            {/* Harga SMT */}
+            <div className="pt-3 border-t border-brown-100 dark:border-brown-800">
+              <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold">Harga SMT</p>
+              <p className="text-gold-600 dark:text-gold-400 font-bold text-2xl tracking-tight">
+                {formatRupiah(detail.hargaSmt)}
+              </p>
+              <p className="text-[11px] text-brown-400 dark:text-brown-500 mt-0.5">Belum termasuk PPN 1,1%</p>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

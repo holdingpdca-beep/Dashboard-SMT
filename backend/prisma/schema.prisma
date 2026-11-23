@@ -41,6 +41,7 @@ model Notifikasi {
 model Elektronik {
   id               Int           @id @default(autoincrement())
   nomorSbg         String        @unique @map("nomor_sbg")
+  vendor           String?       // vendor/asal barang (mis. GMN, GMS, EKSTERNAL) — informatif saja
   grade            Grade
   jenisBarang      String        @map("jenis_barang")
   detailBarang     String        @map("detail_barang")
@@ -228,32 +229,85 @@ enum KategoriEmas {
 model BarangArt {
   id          Int          @id @default(autoincrement())
   kategori    KategoriArt
-  barangAsal  String       @default("") @map("barang_asal") // asal barang, wajib diisi di aplikasi; default "" hanya untuk baris lama
+  barangAsal  String       @default("") @map("barang_asal") // (deprecated) tidak dipakai lagi di UI; dipertahankan utk baris lama
+  vendorAsal  String?      @map("vendor_asal") // vendor/pegadaian asal (Gadai Mas/Gadai Mulia) → dasar Kode Barang
   nomorSbg    String       @map("nomor_sbg")
   provinsi    String
   namaBarang  String       @map("nama_barang")
   gramasi     Decimal      @db.Decimal(12, 3)
   karat       String
-  cogs        Decimal      @db.Decimal(15, 2)
-  kodeBarang  String       @map("kode_barang")
+  totalHarga  Decimal?     @map("total_harga") @db.Decimal(15, 2) // nilai lelang sebelum bea
+  beaLelang   Decimal?     @map("bea_lelang") @db.Decimal(15, 2) // bea lelang
+  cogs        Decimal      @db.Decimal(15, 2) // = Payment SMT (Total Harga + Bea Lelang) → modal/COGS
+  kodeBarang  String?      @map("kode_barang") // null utk Perhiasan aktif; LMN/LMS utk Logam Mulia; EKS saat masuk Barang Eksport
+  tahap       TahapArt     @default(AKTIF) // lokasi/siklus: AKTIF | EKSPORT | TERJUAL | DILEBUR
   tanggalJual DateTime?    @map("tanggal_jual") // terisi hanya bila sudah terjual
   nominalJual Decimal?     @map("nominal_jual") @db.Decimal(15, 2) // terisi hanya bila sudah terjual
   vendor      String? // vendor pembeli, diisi saat tandai terjual
   nomorSku    String?      @map("nomor_sku") // satu SKU bisa dipakai banyak barang dalam 1 penjualan
+  tanggalLebur   DateTime? @map("tanggal_lebur") // terisi bila perhiasan dilebur
+  tanggalEksport DateTime? @map("tanggal_eksport") // terisi bila dipindah ke Barang Eksport
+  gambar      String?      @db.Text // URL/path foto barang (dipakai di Barang Eksport)
   keterangan  String?      @db.Text
   status      StatusBarang @default(BELUM_TERJUAL)
+  cukimId     Int?         @map("cukim_id") // terisi bila barang ini ikut dilebur menjadi sebuah Cukim
+  cukim       Cukim?       @relation(fields: [cukimId], references: [id], onDelete: SetNull)
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
   // Catatan: satu No SBG (surat gadai) bisa memuat banyak barang → nomorSbg TIDAK unik.
   @@index([kategori])
   @@index([status])
+  @@index([tahap])
   @@index([nomorSku])
   @@index([nomorSbg])
+  @@index([kodeBarang])
+  @@index([cukimId])
   @@map("barang_art")
+}
+
+// Cukim = gumpalan emas hasil lebur. Dibuat saat barang perhiasan dilebur:
+// beberapa barang digabung jadi 1 Cukim. COGS = total Payment SMT barang yang dilebur.
+// Barang asal tetap tersimpan sebagai History (tahap DILEBUR) dan terhubung via BarangArt.cukimId.
+model Cukim {
+  id         Int         @id @default(autoincrement())
+  noCukim    String      @unique @map("no_cukim") // CKM## (nomor berjalan, tak dipakai ulang)
+  berat      Decimal     @db.Decimal(12, 3) // berat cukim (gram), diisi manual saat lebur
+  kadarXrf   String      @map("kadar_xrf") // kadar hasil uji XRF (teks bebas, mis. "99.9%")
+  cogs       Decimal      @db.Decimal(15, 2) // = total Payment SMT barang yang dilebur
+  tanggal    DateTime? // tanggal lebur / pembuatan cukim
+  keterangan String?      @db.Text
+  status     StatusBarang @default(BELUM_TERJUAL) // BELUM_TERJUAL (aktif) | TERJUAL (history)
+  tanggalJual DateTime?   @map("tanggal_jual") // terisi bila cukim terjual
+  nominalJual Decimal?    @map("nominal_jual") @db.Decimal(15, 2) // harga jual cukim
+  vendor     String? // vendor/pembeli, diisi saat tandai terjual
+  nomorSku   String?      @map("nomor_sku")
+  items      BarangArt[] // barang asal yang dilebur menjadi cukim ini
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@map("cukim")
 }
 
 enum KategoriArt {
   LOGAM_MULIA
   PERHIASAN
+}
+
+enum TahapArt {
+  AKTIF // masih di daftar Logam Mulia / Perhiasan
+  EKSPORT // dipindah ke Barang Eksport (perhiasan bagus)
+  TERJUAL // sudah terjual → History
+  DILEBUR // perhiasan dilebur → History
+}
+
+// Penghitung nomor berjalan Kode Barang per prefix (LMN/LMS/EKS).
+// lastNumber HANYA bertambah → nomor tidak pernah dipakai ulang, bahkan setelah
+// barang terjual, dipindah, atau dihapus.
+model KodeCounter {
+  prefix     String @id
+  lastNumber Int    @default(0) @map("last_number")
+
+  @@map("kode_counter")
 }
