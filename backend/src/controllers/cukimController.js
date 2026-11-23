@@ -160,22 +160,33 @@ const markSold = async (req, res, next) => {
     const skuClean = nomorSku && String(nomorSku).trim() ? String(nomorSku).trim() : null;
     const ketClean = keterangan !== undefined && String(keterangan).trim() !== '' ? String(keterangan).trim() : undefined;
 
-    const updated = await prisma.$transaction(parsed.map(p => prisma.cukim.update({
-      where: { id: p.id },
-      data: {
-        status: 'TERJUAL', tanggalJual: tgl, nominalJual: p.nominal, vendor: vendorClean, nomorSku: skuClean,
-        ...(ketClean !== undefined ? { keterangan: ketClean } : {}),
-      },
-    })));
+    // Guard atomik (L-09): updateMany dengan syarat status='BELUM_TERJUAL' + cek count,
+    // agar satu Cukim tidak bisa dijual dua kali oleh aksi paralel.
+    const updatedCount = await prisma.$transaction(async (tx) => {
+      let n = 0;
+      for (const p of parsed) {
+        const r = await tx.cukim.updateMany({
+          where: { id: p.id, status: 'BELUM_TERJUAL' },
+          data: {
+            status: 'TERJUAL', tanggalJual: tgl, nominalJual: p.nominal, vendor: vendorClean, nomorSku: skuClean,
+            ...(ketClean !== undefined ? { keterangan: ketClean } : {}),
+          },
+        });
+        if (r.count !== 1) throw Object.assign(new Error('Sebagian Cukim berubah status saat diproses, muat ulang halaman & coba lagi'), { status: 409 });
+        n++;
+      }
+      return n;
+    });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `TANDAI TERJUAL CUKIM (${updated.length}: ${updated.map(c => c.noCukim).join(', ')})`,
-      tabel: 'Cukim', dataBaru: { ids: parsed.map(p => p.id), vendor: vendorClean, tanggalJual: tgl }, ipAddress: req.ip,
+      aktivitas: `TANDAI TERJUAL CUKIM (${updatedCount} cukim, SKU ${skuClean || '-'})`,
+      tabel: 'Cukim', dataBaru: { ids: parsed.map(p => p.id), vendor: vendorClean, nomorSku: skuClean, tanggalJual: tgl }, ipAddress: req.ip,
     });
 
-    res.json({ success: true, message: `${updated.length} Cukim ditandai terjual`, data: updated });
+    res.json({ success: true, message: `${updatedCount} Cukim ditandai terjual`, data: { count: updatedCount } });
   } catch (err) {
+    if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
     next(err);
   }
 };
@@ -205,13 +216,21 @@ const revertToAktif = async (req, res, next) => {
   }
 };
 
-// Hapus Cukim. Barang yang terhubung TIDAK ikut terhapus — tautannya dilepas
-// (cukimId→null via onDelete SetNull), barang tetap di History sebagai Dilebur.
+// Hapus Cukim. Dicegah bila Cukim sudah terjual (catatan penjualan hilang) atau masih
+// punya barang terhubung (L-09): barang harus dikembalikan ke aktif via batal lebur dulu,
+// agar tidak ada barang yatim berstatus DILEBUR tanpa Cukim.
 const deleteItem = async (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
-    const existing = await prisma.cukim.findUnique({ where: { id } });
+    const existing = await prisma.cukim.findUnique({ where: { id }, include: { _count: { select: { items: true } } } });
     if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
+
+    if (existing.status === 'TERJUAL') {
+      return res.status(400).json({ success: false, message: `Cukim ${existing.noCukim} sudah terjual, tidak dapat dihapus. Batalkan penjualannya dulu.` });
+    }
+    if (existing._count.items > 0) {
+      return res.status(400).json({ success: false, message: `Cukim ${existing.noCukim} masih memuat ${existing._count.items} barang. Batalkan lebur (kembalikan barang ke aktif) dulu sebelum menghapus.` });
+    }
 
     await prisma.cukim.delete({ where: { id } });
 

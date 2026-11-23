@@ -133,8 +133,17 @@ app.use('/api/notifikasi', notifikasiRoutes);
 app.use('/api/cabang', cabangRoutes);
 app.use('/api/barang-art', barangArtRoutes);
 app.use('/api/cukim', cukimRoutes);
-// Katalog elektronik publik — tanpa autentikasi (bisa diakses siapa saja)
-app.use('/api/katalog-elektronik', katalogPublikRoutes);
+// Katalog elektronik publik — tanpa autentikasi (bisa diakses siapa saja).
+// L-07: rate-limit lebih ketat khusus endpoint publik (selain apiLimiter global),
+// karena endpoint ini menjalankan LIKE + DISTINCT atas seluruh stok tiap request.
+const katalogPublikLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 menit
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Terlalu banyak permintaan, coba lagi nanti.' },
+});
+app.use('/api/katalog-elektronik', katalogPublikLimiter, katalogPublikRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Dashboard SMT Backend Running', timestamp: new Date() });

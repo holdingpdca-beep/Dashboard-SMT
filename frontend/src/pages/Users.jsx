@@ -200,7 +200,7 @@ export default function Users() {
           </>
         }>
         <div><label className="label">Password Baru *</label>
-          <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} className="input-field" placeholder="Minimal 6 karakter" /></div>
+          <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} className="input-field" placeholder="Minimal 10 karakter" /></div>
       </Modal>
     </div>
   )

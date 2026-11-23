@@ -4,7 +4,7 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const { requireRole, ELEKTRONIK_ROLES } = require('../middleware/roleCheck');
 const { handleValidation } = require('../middleware/validate');
-const { createItemRules, updateItemRules, jualItemsRules } = require('../middleware/validators');
+const { createItemRules, updateItemRules, jualItemsRules, voidStrukRules } = require('../middleware/validators');
 const { getItems, getItemById, createItem, updateItem, deleteItem, importExcel, exportExcel, getStats, getRiwayat, jualItems, voidStruk, exportRiwayat } = require('../controllers/itemController');
 
 // Whitelist tipe file Excel untuk import
@@ -32,7 +32,7 @@ router.get('/riwayat/export', requireRole('ADMIN', 'SUPER_USER'), exportRiwayat)
 router.get('/riwayat', getRiwayat);
 router.post('/jual', jualItemsRules, handleValidation, jualItems);
 // H-02: pembatalan (void) penjualan hanya untuk ADMIN
-router.post('/struk/:nomorStruk/void', requireRole('ADMIN'), voidStruk);
+router.post('/struk/:nomorStruk/void', requireRole('ADMIN'), voidStrukRules, handleValidation, voidStruk);
 router.get('/', getItems);
 router.get('/:id', getItemById);
 router.post('/', requireRole('ADMIN', 'SUPER_USER'), createItemRules, handleValidation, createItem);

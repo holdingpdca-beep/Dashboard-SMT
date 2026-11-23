@@ -32,13 +32,6 @@ function KartuBarang({ item, onClick }) {
           {item.nama}
         </p>
 
-        {/* Keterangan */}
-        {item.keterangan && (
-          <p className="text-sm text-brown-500 dark:text-brown-400 mt-1 line-clamp-3">
-            {item.keterangan}
-          </p>
-        )}
-
         {/* Harga SMT */}
         <div className="mt-auto pt-3">
           <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold">Harga SMT</p>
@@ -125,7 +118,7 @@ export default function KatalogElektronik() {
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Cari nama barang atau keterangan..."
+              placeholder="Cari nama barang..."
               className="input-field pl-9"
             />
           </div>
@@ -242,14 +235,6 @@ export default function KatalogElektronik() {
               <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold mb-1">Nama Barang</p>
               <p className="font-semibold text-brown-800 dark:text-gold-100 leading-snug text-lg break-words whitespace-pre-wrap">
                 {detail.nama}
-              </p>
-            </div>
-
-            {/* Keterangan lengkap */}
-            <div>
-              <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold mb-1">Keterangan</p>
-              <p className="text-sm text-brown-600 dark:text-brown-300 leading-relaxed break-words whitespace-pre-wrap">
-                {detail.keterangan || '-'}
               </p>
             </div>
 

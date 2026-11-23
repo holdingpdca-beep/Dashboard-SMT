@@ -514,23 +514,32 @@ const exportExcel = async (req, res, next) => {
   }
 };
 
-// Nomor invoice/struk sekuensial: SMT-YYYY-NNNN (mis. SMT-2026-0001) — kode PT + tahun +
-// running number, diambil dari nomor terbesar tahun berjalan + 1. Tabrakan ditangani retry
-// di jualItems. (Sebelumnya prefix "STR-"; nomor lama STR-YYYY-NNNN tetap tersimpan apa adanya.)
-async function generateNomorStruk() {
+// Nomor struk sekuensial: SMT-YYYY-NNNN (mis. SMT-2026-0001) — kode PT + tahun + running number.
+// L-06: nomor dialokasikan ATOMIK lewat tabel `kode_counter` (prefix per tahun "SMT-YYYY"),
+// DI DALAM transaksi penjualan, sehingga dua penjualan bersamaan tidak pernah berbagi nomor.
+// (Sebelumnya dihitung dari MAX+1 di luar transaksi + retry P2002 yg tak pernah aktif karena
+// kolom nomor_struk tidak unik.) Nomor lama STR-YYYY-NNNN tetap tersimpan apa adanya.
+async function nomorStrukBerikutnya(tx) {
   const year = new Date().getFullYear();
-  const prefix = `SMT-${year}-`;
-  const last = await prisma.elektronik.findFirst({
-    where: { nomorStruk: { startsWith: prefix } },
-    orderBy: { nomorStruk: 'desc' },
-    select: { nomorStruk: true },
-  });
-  let seq = 1;
-  if (last && last.nomorStruk) {
-    const n = parseInt(last.nomorStruk.slice(prefix.length), 10);
-    if (!isNaN(n)) seq = n + 1;
+  const prefix = `SMT-${year}`;      // kunci counter
+  const strukPrefix = `${prefix}-`;  // awalan nomor struk
+  // Seed counter dari nomor terbesar tahun berjalan bila baris counter belum ada (data lama).
+  const counterAda = await tx.kodeCounter.findUnique({ where: { prefix } });
+  if (!counterAda) {
+    const last = await tx.elektronik.findFirst({
+      where: { nomorStruk: { startsWith: strukPrefix } },
+      orderBy: { nomorStruk: 'desc' },
+      select: { nomorStruk: true },
+    });
+    let seed = 0;
+    if (last && last.nomorStruk) {
+      const n = parseInt(last.nomorStruk.slice(strukPrefix.length), 10);
+      if (!isNaN(n)) seed = n;
+    }
+    await tx.kodeCounter.upsert({ where: { prefix }, create: { prefix, lastNumber: seed }, update: {} });
   }
-  return `${prefix}${String(seq).padStart(4, '0')}`;
+  const updated = await tx.kodeCounter.update({ where: { prefix }, data: { lastNumber: { increment: 1 } } });
+  return `${strukPrefix}${String(updated.lastNumber).padStart(4, '0')}`;
 }
 
 const JENIS_PEMBELI = ['KARYAWAN_INTERNAL', 'EKSTERNAL', 'PENGEPUL'];
@@ -593,40 +602,33 @@ const jualItems = async (req, res, next) => {
       }
     }
 
-    // Buat nomor struk + simpan penjualan dalam satu transaksi atomik (+ retry nomor tabrakan)
+    // Buat nomor struk + simpan penjualan dalam satu transaksi atomik. Nomor dialokasikan
+    // di dalam transaksi (L-06), jadi tidak perlu retry tabrakan nomor lagi.
     let nomorStruk = null;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      nomorStruk = await generateNomorStruk();
-      try {
-        await prisma.$transaction(async (tx) => {
-          for (const b of barang) {
-            const net = hargaById.get(b.id);
-            const ppn = parseFloat((net * 0.011).toFixed(2));
-            const totalHarga = parseFloat((net + ppn).toFixed(2));
-            const profit = parseFloat((net - parseFloat(b.cogs)).toFixed(2));
-            // updateMany dgn guard status agar tak bisa terjual ganda (race)
-            const r = await tx.elektronik.updateMany({
-              where: { id: b.id, status: 'BELUM_TERJUAL' },
-              data: {
-                status: 'TERJUAL',
-                hargaJual: net, ppn, totalHarga, profit,
-                offeringPengepul: null,
-                tanggalJual, namaPelanggan, noTelepon: noTelepon || null,
-                namaSales, jenisPembeli, nomorStruk,
-                soldById: req.user.id,
-              },
-            });
-            if (r.count !== 1) {
-              throw Object.assign(new Error(`Barang ${b.nomorSbg} sudah terjual di transaksi lain`), { status: 409 });
-            }
-          }
+    await prisma.$transaction(async (tx) => {
+      nomorStruk = await nomorStrukBerikutnya(tx);
+      for (const b of barang) {
+        const net = hargaById.get(b.id);
+        const ppn = parseFloat((net * 0.011).toFixed(2));
+        const totalHarga = parseFloat((net + ppn).toFixed(2));
+        const profit = parseFloat((net - parseFloat(b.cogs)).toFixed(2));
+        // updateMany dgn guard status agar tak bisa terjual ganda (race)
+        const r = await tx.elektronik.updateMany({
+          where: { id: b.id, status: 'BELUM_TERJUAL' },
+          data: {
+            status: 'TERJUAL',
+            hargaJual: net, ppn, totalHarga, profit,
+            offeringPengepul: null,
+            tanggalJual, namaPelanggan, noTelepon: noTelepon || null,
+            namaSales, jenisPembeli, nomorStruk,
+            soldById: req.user.id,
+          },
         });
-        break;
-      } catch (e) {
-        if (e.code === 'P2002' && attempt < 4) continue; // nomor struk tabrakan → coba lagi
-        throw e;
+        if (r.count !== 1) {
+          throw Object.assign(new Error(`Barang ${b.nomorSbg} sudah terjual di transaksi lain`), { status: 409 });
+        }
       }
-    }
+    });
 
     const terjual = await prisma.elektronik.findMany({ where: { nomorStruk }, orderBy: { id: 'asc' } });
 
@@ -678,8 +680,10 @@ const voidStruk = async (req, res, next) => {
 
     await prisma.$transaction(async (tx) => {
       for (const b of barang) {
-        // Kembalikan harga jual/ppn/total/profit ke hasil hitung dari COGS (reset harga manual)
-        const h = hitungHarga(b.cogs);
+        // Kembalikan harga jual/ppn/total/profit ke harga efektif dari COGS. Pakai
+        // hargaEfektif() agar override HJ MIN/MAX/HARGA SMT yang tersimpan (dari import
+        // Excel) tetap dihormati, bukan hitungHarga() yang mengabaikannya (L-05).
+        const h = hargaEfektif(b.cogs, { hjMin: b.hjMin, hjMax: b.hjMax, hargaSmt: b.hargaSmt });
         const r = await tx.elektronik.updateMany({
           where: { id: b.id, status: 'TERJUAL', nomorStruk },
           data: {
@@ -873,10 +877,12 @@ const getRiwayat = async (req, res, next) => {
         { detailBarang: { contains: search } },
         { nomorSbg: { contains: search } },
         { vendor: { contains: search } },
-        { namaPelanggan: { contains: search } },
         { nomorStruk: { contains: search } },
         { namaSales: { contains: search } },
       ];
+      // L-08: pencarian berdasarkan nama pelanggan hanya untuk role yang berwenang,
+      // agar role biasa tidak bisa "menebak" keberadaan pelanggan tertentu (oracle).
+      if (canSeeAll(req.user)) where.OR.push({ namaPelanggan: { contains: search } });
     }
 
     const [total, agregat, items] = await Promise.all([
@@ -1013,15 +1019,17 @@ const getPublicKatalog = async (req, res, next) => {
 
     const where = { status: 'BELUM_TERJUAL' };
     if (req.query.search) {
+      // M-03: pencarian publik TIDAK menyertakan `keterangan` (catatan internal
+      // bisa memuat data sensitif). Hanya nama barang & jenis yang dicari.
+      const q = String(req.query.search).slice(0, 100); // L-07: batasi panjang
       where.OR = [
-        { detailBarang: { contains: req.query.search } },
-        { keterangan: { contains: req.query.search } },
-        { jenisBarang: { contains: req.query.search } },
+        { detailBarang: { contains: q } },
+        { jenisBarang: { contains: q } },
       ];
     }
     if (['A', 'B', 'C', 'D'].includes(req.query.grade)) where.grade = req.query.grade;
     // Filter kategori (jenis barang: Handphone, Tablet, Laptop, dll) — cocok persis
-    if (req.query.kategori) where.jenisBarang = req.query.kategori;
+    if (req.query.kategori) where.jenisBarang = String(req.query.kategori).slice(0, 50); // L-07
 
     const [total, items, kategoriRows] = await Promise.all([
       prisma.elektronik.count({ where }),
@@ -1034,7 +1042,6 @@ const getPublicKatalog = async (req, res, next) => {
         select: {
           id: true,
           detailBarang: true,
-          keterangan: true,
           grade: true,
           jenisBarang: true,
           cogs: true,
@@ -1060,13 +1067,15 @@ const getPublicKatalog = async (req, res, next) => {
       return {
         id: i.id,
         nama: i.detailBarang,
-        keterangan: i.keterangan,
         grade: i.grade,
         jenisBarang: i.jenisBarang,
         hargaSmt,
       };
     });
 
+    // L-07: cache singkat agar katalog publik tidak memukul DB tiap request
+    // (LIKE + DISTINCT atas seluruh stok). 60 detik cukup aman untuk data stok.
+    res.setHeader('Cache-Control', 'public, max-age=60');
     res.json({
       success: true,
       data,

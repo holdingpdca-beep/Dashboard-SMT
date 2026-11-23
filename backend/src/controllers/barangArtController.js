@@ -52,14 +52,17 @@ async function maxSuffix(client, prefix) {
 // Counter hanya bertambah → nomor tak pernah dipakai ulang (walau barang terjual/pindah/dihapus).
 // `client` = prisma atau tx (dipanggil di dalam $transaction agar aman dari race).
 async function allocateKode(client, prefix, count = 1) {
-  let counter = await client.kodeCounter.findUnique({ where: { prefix } });
-  if (!counter) {
+  // Pastikan baris counter ada. upsert aman bila dua proses membuat counter prefix
+  // yang sama bersamaan (yang kalah tidak menimpa nilai yang sudah ada).
+  const existing = await client.kodeCounter.findUnique({ where: { prefix } });
+  if (!existing) {
     const seed = await maxSuffix(client, prefix); // mulai dari data lama bila ada
-    counter = await client.kodeCounter.create({ data: { prefix, lastNumber: seed } });
+    await client.kodeCounter.upsert({ where: { prefix }, create: { prefix, lastNumber: seed }, update: {} });
   }
-  const start = counter.lastNumber + 1;
-  await client.kodeCounter.update({ where: { prefix }, data: { lastNumber: counter.lastNumber + count } });
-  return start;
+  // Increment ATOMIK: UPDATE ... SET lastNumber = lastNumber + count mengunci baris di
+  // MySQL, sehingga dua alokasi paralel mendapat rentang nomor yang berbeda (tidak kembar).
+  const updated = await client.kodeCounter.update({ where: { prefix }, data: { lastNumber: { increment: count } } });
+  return updated.lastNumber - count + 1;
 }
 
 // Parsing angka uang toleran format Excel: " 32,093,000.00 " → 32093000, " -   " → null(→0).
@@ -318,24 +321,33 @@ const markSold = async (req, res, next) => {
     const skuClean = String(nomorSku).trim();
     const ketClean = keterangan !== undefined && String(keterangan).trim() !== '' ? String(keterangan).trim() : null;
 
-    const updated = await prisma.$transaction(
-      parsed.map(p => prisma.barangArt.update({
-        where: { id: p.id },
-        data: {
-          tahap: 'TERJUAL', status: 'TERJUAL', tanggalJual: tglJual, nominalJual: p.nominal, vendor: vendorClean, nomorSku: skuClean,
-          ...(ketClean !== null ? { keterangan: ketClean } : {}),
-        },
-      }))
-    );
+    // Guard atomik (L-09): updateMany dengan syarat tahap='AKTIF' + cek count,
+    // agar barang yang sama tidak bisa diproses dua kali oleh aksi paralel.
+    const updatedCount = await prisma.$transaction(async (tx) => {
+      let n = 0;
+      for (const p of parsed) {
+        const r = await tx.barangArt.updateMany({
+          where: { id: p.id, tahap: 'AKTIF' },
+          data: {
+            tahap: 'TERJUAL', status: 'TERJUAL', tanggalJual: tglJual, nominalJual: p.nominal, vendor: vendorClean, nomorSku: skuClean,
+            ...(ketClean !== null ? { keterangan: ketClean } : {}),
+          },
+        });
+        if (r.count !== 1) throw Object.assign(new Error('Sebagian barang berubah status saat diproses, muat ulang halaman & coba lagi'), { status: 409 });
+        n++;
+      }
+      return n;
+    });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `TANDAI TERJUAL BARANG ART (${updated.length} barang, SKU ${skuClean})`,
+      aktivitas: `TANDAI TERJUAL BARANG ART (${updatedCount} barang, SKU ${skuClean})`,
       tabel: 'BarangArt', dataBaru: { ids: parsed.map(p => p.id), vendor: vendorClean, nomorSku: skuClean, tanggalJual: tglJual }, ipAddress: req.ip,
     });
 
-    res.json({ success: true, message: `${updated.length} barang ditandai terjual`, data: updated });
+    res.json({ success: true, message: `${updatedCount} barang ditandai terjual`, data: { count: updatedCount } });
   } catch (err) {
+    if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
     next(err);
   }
 };
@@ -369,10 +381,13 @@ const leburItems = async (req, res, next) => {
       });
       let updatedCount = 0;
       for (const i of items) {
-        await tx.barangArt.update({
-          where: { id: i.id },
+        // Guard atomik (L-09): hanya lebur bila barang masih AKTIF, agar tidak bisa
+        // dilebur dua kali (COGS ganda) oleh aksi paralel.
+        const r = await tx.barangArt.updateMany({
+          where: { id: i.id, tahap: 'AKTIF' },
           data: { tahap: 'DILEBUR', tanggalLebur: tglLebur, cukimId: cukim.id, ...(ketClean !== null ? { keterangan: ketClean } : {}) },
         });
+        if (r.count !== 1) throw Object.assign(new Error('Sebagian barang berubah status saat dilebur, muat ulang halaman & coba lagi'), { status: 409 });
         updatedCount++;
       }
       return { cukim, updatedCount };
@@ -386,6 +401,7 @@ const leburItems = async (req, res, next) => {
 
     res.json({ success: true, message: `${updatedCount} barang dilebur menjadi Cukim ${cukim.noCukim}`, data: { cukim, updatedCount } });
   } catch (err) {
+    if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
     next(err);
   }
 };
@@ -401,18 +417,29 @@ const moveToPerhiasan = async (req, res, next) => {
     if (error) return res.status(400).json({ success: false, message: error });
 
     // Jadi perhiasan → tidak berkode lagi (kode LMN/LMS dilepas; nomornya tak dipakai ulang).
-    const updated = await prisma.$transaction(
-      items.map(i => prisma.barangArt.update({ where: { id: i.id }, data: { kategori: 'PERHIASAN', kodeBarang: null } }))
-    );
+    // Guard atomik (L-09): hanya proses bila masih AKTIF & Logam Mulia.
+    const updatedCount = await prisma.$transaction(async (tx) => {
+      let n = 0;
+      for (const i of items) {
+        const r = await tx.barangArt.updateMany({
+          where: { id: i.id, tahap: 'AKTIF', kategori: 'LOGAM_MULIA' },
+          data: { kategori: 'PERHIASAN', kodeBarang: null },
+        });
+        if (r.count !== 1) throw Object.assign(new Error('Sebagian barang berubah status saat diproses, muat ulang halaman & coba lagi'), { status: 409 });
+        n++;
+      }
+      return n;
+    });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `PINDAH KE PERHIASAN (${updated.length} barang)`,
+      aktivitas: `PINDAH KE PERHIASAN (${updatedCount} barang)`,
       tabel: 'BarangArt', dataBaru: { ids }, ipAddress: req.ip,
     });
 
-    res.json({ success: true, message: `${updated.length} barang dipindah ke Perhiasan`, data: updated });
+    res.json({ success: true, message: `${updatedCount} barang dipindah ke Perhiasan`, data: { count: updatedCount } });
   } catch (err) {
+    if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
     next(err);
   }
 };
@@ -429,26 +456,31 @@ const moveToEksport = async (req, res, next) => {
     if (error) return res.status(400).json({ success: false, message: error });
 
     // Saat masuk Barang Eksport, kode EKS## dibuat otomatis (nomor berjalan).
-    const updated = await prisma.$transaction(async (tx) => {
+    const updatedCount = await prisma.$transaction(async (tx) => {
       const start = await allocateKode(tx, 'EKS', items.length);
-      const out = [];
+      let n = 0;
       for (let idx = 0; idx < items.length; idx++) {
-        out.push(await tx.barangArt.update({
-          where: { id: items[idx].id },
+        // Guard atomik (L-09): hanya proses bila masih AKTIF & Perhiasan. Bila ada yang
+        // gagal, seluruh transaksi di-rollback termasuk alokasi nomor EKS (tidak bolong).
+        const r = await tx.barangArt.updateMany({
+          where: { id: items[idx].id, tahap: 'AKTIF', kategori: 'PERHIASAN' },
           data: { tahap: 'EKSPORT', tanggalEksport: tgl, kodeBarang: formatKode('EKS', start + idx) },
-        }));
+        });
+        if (r.count !== 1) throw Object.assign(new Error('Sebagian barang berubah status saat diproses, muat ulang halaman & coba lagi'), { status: 409 });
+        n++;
       }
-      return out;
+      return n;
     });
 
     await createAuditLog({
       userId: req.user.id, namaUser: req.user.nama,
-      aktivitas: `PINDAH KE BARANG EKSPORT (${updated.length} barang)`,
+      aktivitas: `PINDAH KE BARANG EKSPORT (${updatedCount} barang)`,
       tabel: 'BarangArt', dataBaru: { ids }, ipAddress: req.ip,
     });
 
-    res.json({ success: true, message: `${updated.length} barang dipindah ke Barang Eksport`, data: updated });
+    res.json({ success: true, message: `${updatedCount} barang dipindah ke Barang Eksport`, data: { count: updatedCount } });
   } catch (err) {
+    if (err.status === 409) return res.status(409).json({ success: false, message: err.message });
     next(err);
   }
 };
@@ -461,17 +493,36 @@ const revertToAktif = async (req, res, next) => {
     if (!existing) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
     if (existing.tahap === 'AKTIF') return res.status(400).json({ success: false, message: 'Barang sudah aktif' });
 
-    const updated = await prisma.barangArt.update({
-      where: { id },
-      data: {
-        tahap: 'AKTIF', status: 'BELUM_TERJUAL',
-        tanggalJual: null, nominalJual: null, vendor: null, nomorSku: null,
-        tanggalLebur: null, tanggalEksport: null,
-        // Batal lebur → lepas tautan ke Cukim (barang keluar dari gabungan cukim).
-        ...(existing.tahap === 'DILEBUR' ? { cukimId: null } : {}),
-        // Dari Barang Eksport → kembali jadi perhiasan tanpa kode (kode EKS dilepas).
-        ...(existing.tahap === 'EKSPORT' ? { kodeBarang: null } : {}),
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      // Batal lebur (L-09): barang terhubung ke sebuah Cukim.
+      if (existing.tahap === 'DILEBUR' && existing.cukimId) {
+        const cukim = await tx.cukim.findUnique({ where: { id: existing.cukimId } });
+        if (cukim) {
+          // Tolak bila Cukim-nya sudah terjual — melepas barang akan merusak catatan penjualan.
+          if (cukim.status === 'TERJUAL') {
+            throw Object.assign(new Error(`Tidak bisa batal lebur: Cukim ${cukim.noCukim} sudah terjual. Batalkan penjualan Cukim dulu.`), { status: 400 });
+          }
+          // Kurangi COGS Cukim sebesar Payment SMT barang yang dilepas (agar tidak double-count).
+          const cogsBarang = existing.cogs != null ? parseFloat(existing.cogs) : 0;
+          const cogsCukimBaru = Math.max(0, parseFloat(cukim.cogs) - cogsBarang);
+          await tx.cukim.update({ where: { id: cukim.id }, data: { cogs: cogsCukimBaru } });
+        }
+      }
+      // Guard atomik: hanya ubah bila tahap belum berpindah.
+      const r = await tx.barangArt.updateMany({
+        where: { id, tahap: existing.tahap },
+        data: {
+          tahap: 'AKTIF', status: 'BELUM_TERJUAL',
+          tanggalJual: null, nominalJual: null, vendor: null, nomorSku: null,
+          tanggalLebur: null, tanggalEksport: null,
+          // Batal lebur → lepas tautan ke Cukim (barang keluar dari gabungan cukim).
+          ...(existing.tahap === 'DILEBUR' ? { cukimId: null } : {}),
+          // Dari Barang Eksport → kembali jadi perhiasan tanpa kode (kode EKS dilepas).
+          ...(existing.tahap === 'EKSPORT' ? { kodeBarang: null } : {}),
+        },
+      });
+      if (r.count !== 1) throw Object.assign(new Error('Status barang berubah saat diproses, muat ulang halaman & coba lagi'), { status: 409 });
+      return tx.barangArt.findUnique({ where: { id } });
     });
 
     await createAuditLog({
@@ -482,6 +533,7 @@ const revertToAktif = async (req, res, next) => {
 
     res.json({ success: true, message: 'Barang dikembalikan ke daftar aktif', data: updated });
   } catch (err) {
+    if (err.status === 400 || err.status === 409) return res.status(err.status).json({ success: false, message: err.message });
     next(err);
   }
 };

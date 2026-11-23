@@ -1,4 +1,4 @@
-const { body } = require('express-validator');
+const { body, param } = require('express-validator');
 
 // Kumpulan aturan validasi input untuk endpoint POST/PUT utama.
 // Dipasang di route sebelum handleValidation. Melengkapi (bukan mengganti)
@@ -55,6 +55,12 @@ const jualItemsRules = [
   body('items').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 barang harus dipilih (maks 500)'),
   body('items.*.id').isInt().withMessage('ID barang tidak valid'),
   body('items.*.hargaJual').isFloat({ gt: 0 }).withMessage('Harga jual setiap barang harus lebih dari 0'),
+];
+
+// Pembatalan (void) struk — alasan wajib & dibatasi panjangnya agar tidak melewati
+// kolom audit `aktivitas` (L-05 / M-02).
+const voidStrukRules = [
+  body('alasan').trim().notEmpty().withMessage('Alasan pembatalan wajib diisi').bail().isLength({ min: 5, max: 300 }).withMessage('Alasan pembatalan harus 5–300 karakter'),
 ];
 
 // ── Invoice ──
@@ -192,12 +198,36 @@ const moveArtRules = [
   body('ids.*').isInt().withMessage('ID barang tidak valid'),
 ];
 
+// ── Cukim (L-09) ──
+// Param :id wajib angka agar parseInt tidak menghasilkan NaN → error Prisma 500.
+const idParamRule = [
+  param('id').isInt({ min: 1 }).withMessage('ID tidak valid'),
+];
+
+const cukimMarkSoldRules = [
+  body('tanggalJual').notEmpty().withMessage('Tanggal jual wajib diisi'),
+  body('vendor').trim().notEmpty().withMessage('Pembeli wajib diisi').bail().isLength({ max: 150 }).withMessage('Pembeli maksimal 150 karakter'),
+  body('nomorSku').optional({ nullable: true, checkFalsy: true }).isLength({ max: 100 }).withMessage('Nomor SKU maksimal 100 karakter'),
+  body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
+  body('items').isArray({ min: 1, max: 500 }).withMessage('Minimal 1 Cukim harus dipilih (maks 500)'),
+  body('items.*.id').isInt().withMessage('ID Cukim tidak valid'),
+  body('items.*.nominalJual').isFloat({ min: 0 }).withMessage('Nominal jual harus angka >= 0'),
+];
+
+const cukimUpdateRules = [
+  param('id').isInt({ min: 1 }).withMessage('ID tidak valid'),
+  body('berat').optional({ nullable: true, checkFalsy: true }).isFloat({ gt: 0 }).withMessage('Berat harus angka > 0'),
+  body('kadarXrf').optional({ nullable: true }).isLength({ max: 100 }).withMessage('Kadar XRF maksimal 100 karakter'),
+  body('keterangan').optional({ nullable: true }).isLength({ max: 1000 }).withMessage('Keterangan maksimal 1000 karakter'),
+];
+
 module.exports = {
   loginRules,
   changePasswordRules,
   createItemRules,
   updateItemRules,
   jualItemsRules,
+  voidStrukRules,
   createInvoiceRules,
   updateInvoiceRules,
   updateInvoiceItemsRules,
@@ -214,4 +244,7 @@ module.exports = {
   markSoldRules,
   leburRules,
   moveArtRules,
+  idParamRule,
+  cukimMarkSoldRules,
+  cukimUpdateRules,
 };
