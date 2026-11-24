@@ -32,6 +32,13 @@ function KartuBarang({ item, onClick }) {
           {item.nama}
         </p>
 
+        {/* Keterangan (preview) */}
+        {item.keterangan && (
+          <p className="text-sm text-brown-500 dark:text-brown-400 mt-1 line-clamp-3">
+            {item.keterangan}
+          </p>
+        )}
+
         {/* Harga SMT */}
         <div className="mt-auto pt-3">
           <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold">Harga SMT</p>
@@ -237,6 +244,16 @@ export default function KatalogElektronik() {
                 {detail.nama}
               </p>
             </div>
+
+            {/* Keterangan lengkap */}
+            {detail.keterangan && (
+              <div>
+                <p className="text-[11px] text-brown-400 dark:text-brown-500 uppercase tracking-wide font-semibold mb-1">Keterangan</p>
+                <p className="text-sm text-brown-600 dark:text-brown-300 leading-relaxed break-words whitespace-pre-wrap">
+                  {detail.keterangan}
+                </p>
+              </div>
+            )}
 
             {/* Harga SMT */}
             <div className="pt-3 border-t border-brown-100 dark:border-brown-800">

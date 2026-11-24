@@ -1008,9 +1008,19 @@ const exportRiwayat = async (req, res, next) => {
 
 // ── Katalog Publik (tanpa login) ──
 // Menampilkan barang elektronik yang BELUM TERJUAL untuk umum.
-// Hanya field aman yang dibuka: nama barang, keterangan, grade, HARGA SMT.
+// Field yang dibuka: nama barang, keterangan (disaring), grade, HARGA SMT.
 // COGS / profit / data pelanggan TIDAK PERNAH dikirim. Barang yang sudah terjual
 // otomatis tidak muncul karena difilter status = BELUM_TERJUAL.
+
+// M-03: `keterangan` adalah catatan internal yang kadang memuat sandi/PIN perangkat
+// nasabah (mis. "pass: 260304"). Sebelum ditampilkan ke publik, potongan yang terlihat
+// seperti sandi/PIN disensor sebagai pengaman — deskripsi barang tetap terbaca.
+const POLA_SENSITIF = /\b(pass(?:word|code)?|pin|sandi|kata\s*sandi|passcode)\b\s*[:=\-]?\s*[^\s,;]+/gi;
+function bersihkanKeteranganPublik(teks) {
+  if (teks === null || teks === undefined) return teks;
+  return String(teks).replace(POLA_SENSITIF, '[disensor]');
+}
+
 const getPublicKatalog = async (req, res, next) => {
   try {
     const page = toInt(req.query.page, 1, 1, 1e9);
@@ -1042,6 +1052,7 @@ const getPublicKatalog = async (req, res, next) => {
         select: {
           id: true,
           detailBarang: true,
+          keterangan: true,
           grade: true,
           jenisBarang: true,
           cogs: true,
@@ -1067,6 +1078,7 @@ const getPublicKatalog = async (req, res, next) => {
       return {
         id: i.id,
         nama: i.detailBarang,
+        keterangan: bersihkanKeteranganPublik(i.keterangan),
         grade: i.grade,
         jenisBarang: i.jenisBarang,
         hargaSmt,
