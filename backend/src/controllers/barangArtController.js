@@ -614,6 +614,38 @@ const deleteItem = async (req, res, next) => {
   }
 };
 
+// Aksi: hapus BANYAK barang sekaligus (hapus permanen). Body: { ids: [...] }
+const deleteItems = async (req, res, next) => {
+  try {
+    const ids = parseIds(req.body.ids);
+    if (ids.length === 0) return res.status(400).json({ success: false, message: 'Minimal 1 barang harus dipilih' });
+
+    const existing = await prisma.barangArt.findMany({ where: { id: { in: ids } } });
+    if (existing.length === 0) return res.status(404).json({ success: false, message: 'Data tidak ditemukan' });
+
+    // Hapus record dulu (transaksi), lalu bersihkan file foto agar tidak jadi file yatim.
+    const result = await prisma.$transaction(async (tx) => {
+      return tx.barangArt.deleteMany({ where: { id: { in: existing.map(i => i.id) } } });
+    });
+
+    for (const item of existing) {
+      if (item.gambar) {
+        try { await hapusFileGambar(item.gambar); } catch { /* abaikan kegagalan hapus file */ }
+      }
+    }
+
+    await createAuditLog({
+      userId: req.user.id, namaUser: req.user.nama,
+      aktivitas: `HAPUS MASSAL BARANG ART (${result.count} barang)`,
+      tabel: 'BarangArt', dataLama: { ids: existing.map(i => i.id), kodeBarang: existing.map(i => i.kodeBarang) }, ipAddress: req.ip,
+    });
+
+    res.json({ success: true, message: `${result.count} barang berhasil dihapus`, data: { count: result.count } });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const exportExcel = async (req, res, next) => {
   try {
     const where = buildWhere(req.query);
@@ -781,6 +813,6 @@ const importExcel = async (req, res, next) => {
 module.exports = {
   getItems, getItemById, createItem, updateItem,
   markSold, leburItems, moveToPerhiasan, moveToEksport, revertToAktif,
-  deleteItem, exportExcel, importExcel,
+  deleteItem, deleteItems, exportExcel, importExcel,
   uploadGambar, hapusGambarItem,
 };

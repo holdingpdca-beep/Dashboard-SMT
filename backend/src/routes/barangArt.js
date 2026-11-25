@@ -9,7 +9,7 @@ const { IMAGE_TYPES } = require('../utils/storage');
 const {
   getItems, getItemById, createItem, updateItem,
   markSold, leburItems, moveToPerhiasan, moveToEksport, revertToAktif,
-  deleteItem, exportExcel, importExcel,
+  deleteItem, deleteItems, exportExcel, importExcel,
   uploadGambar, hapusGambarItem,
 } = require('../controllers/barangArtController');
 
@@ -57,6 +57,7 @@ router.post('/', createBarangArtRules, handleValidation, createItem);
 router.put('/:id', updateBarangArtRules, handleValidation, updateItem);
 router.patch('/:id/aktifkan', revertToAktif);   // kembalikan ke AKTIF (batal jual/lebur/eksport)
 router.patch('/:id/batal-jual', revertToAktif); // alias lama
+router.delete('/', moveArtRules, handleValidation, deleteItems); // hapus massal (body: { ids })
 router.delete('/:id', deleteItem);
 
 module.exports = router;

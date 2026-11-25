@@ -332,6 +332,16 @@ export default function BarangArt({ kategori, view = 'inventory' }) {
     } catch (err) { toast.error(err.response?.data?.message || 'Gagal menghapus') }
   }
 
+  const bulkDelete = async (list) => {
+    if (!list || list.length === 0) return toast.error('Pilih minimal 1 barang')
+    if (!window.confirm(`Hapus ${list.length} barang terpilih? Tindakan ini permanen dan tidak bisa dibatalkan.`)) return
+    try {
+      const { data } = await api.delete('/barang-art', { data: { ids: list.map(i => i.id) } })
+      toast.success(data.message || `${list.length} barang berhasil dihapus`)
+      clearSelection(); fetchItems(pagination.page)
+    } catch (err) { toast.error(err.response?.data?.message || 'Gagal menghapus') }
+  }
+
   const handleExport = async () => {
     try {
       const params = { search, tahap: tahapParam() }
@@ -469,6 +479,10 @@ export default function BarangArt({ kategori, view = 'inventory' }) {
                 <RotateCcw className="w-4 h-4" /> Kembalikan ke Perhiasan
               </button>
             )}
+            <button onClick={() => bulkDelete(selectedList)}
+              className="flex items-center gap-2 text-sm px-4 py-2 rounded-xl font-medium text-white bg-red-500 hover:bg-red-600 transition-colors">
+              <Trash2 className="w-4 h-4" /> Hapus {selectedList.length} barang
+            </button>
             <button onClick={clearSelection} className="flex items-center gap-1 text-xs text-brown-500 hover:text-red-500 transition-colors">
               <X className="w-3.5 h-3.5" /> Batalkan pilihan
             </button>
